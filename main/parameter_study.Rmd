@@ -1,0 +1,1054 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.6.0
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python}
+import numpy as np
+import sdf
+import sys
+import importlib
+import math
+from scipy.signal import find_peaks, peak_widths
+import matplotlib
+import matplotlib.pyplot as plt
+# %matplotlib inline
+
+sys.path.insert(0,'../shared')
+from energy import Energy
+
+import plotting
+importlib.reload(plotting)
+from plotting import *
+
+import sdf_helper
+importlib.reload(sdf_helper)
+from sdf_helper import *
+
+import fan_plane_integrator
+importlib.reload(fan_plane_integrator)
+from fan_plane_integrator import *
+
+import field_line_integrator
+importlib.reload(field_line_integrator)
+from field_line_integrator import *
+```
+
+```{python}
+def fetch_sdffile(time_index, visc, resist, containing_folder, visc_model):
+    timedump = '{0:04d}'.format(time_index)
+    run_string = "v" + str(visc) + "r" + str(resist)
+    run_folder = run_string + "-" + visc_model
+    folder = containing_folder + run_folder + "/Data/"
+    sdfFilename = folder + timedump + ".sdf"
+    return sdf.read(sdfFilename)
+
+def fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder):
+    iso_sdfFile = fetch_sdffile(time_index, visc, resist, containing_folder, "isotropic")
+    swi_sdfFile = fetch_sdffile(time_index, visc, resist, containing_folder, "switching")
+
+    return iso_sdfFile, swi_sdfFile
+
+def format_filename(folder, dump_number):
+    return folder + '{0:04d}'.format(dump_number) + ".sdf"
+
+def find_nearest(array, value):
+    array = np.asarray(array)
+    idx = (np.abs(array - value)).argmin()
+    return array[idx]
+
+def find_nearest_idx(array, value):
+    array = np.asarray(array)
+    idx = (np.abs(array - value)).argmin()
+    return idx
+```
+
+# Settings
+
+```{python}
+data_folder = "/nas/1101974q/archie-latest-organisation-sept-2018/null-point-stressing/"
+parameter_study_folder = "/twisting-driver/parameter-study/"
+high_temporal_cadence_folder = "/twisting-driver/detailed-reconnection-runs/"
+high_resolution_folder = "/twisting-driver/high-resolution/"
+velocity_parameter_study_folder = "/twisting-driver/parameter-study-varying-twist-velocity/"
+
+outdir = "../../images/null_point_khi/param_study/"
+
+DRAFT = True
+```
+
+# Visc heating
+
+```{python}
+def get_energy(nu_power, eta_power, visc_model):
+    folder = data_folder + parameter_study_folder + "v" + str(nu_power) + "r" + str(eta_power) + "-" + visc_model
+    energy_filename = folder + "/Data/en.dat"
+#     print(energy_filename)
+    return Energy(energy_filename)
+```
+
+```{python}
+def plot_energy(axis, nu_power, eta_power, index, is_log_plot=False):
+    iso_folder = data_folder + parameter_study_folder + "v" + str(nu_power) + "r" + str(eta_power) + "-isotropic"
+    swi_folder = data_folder + parameter_study_folder + "v" + str(nu_power) + "r" + str(eta_power) + "-switching"
+    iso_energy_filename = iso_folder + "/Data/en.dat"
+    swi_energy_filename = swi_folder + "/Data/en.dat"
+    energy_iso = Energy(iso_energy_filename)
+    energy_swi = Energy(swi_energy_filename)
+
+    if is_log_plot:
+        axis.semilogy(energy_iso.data[:,0], energy_iso.data[:,index])
+        axis.semilogy(energy_swi.data[:,0], energy_swi.data[:,index], '--')
+    else:
+        axis.plot(energy_iso.data[:,0], energy_iso.data[:,index], label='iso')
+        axis.plot(energy_swi.data[:,0], energy_swi.data[:,index], '--', label='swi')
+```
+
+```{python}
+def plot_visc_heating(axis, nu_power, eta_power):
+    plot_energy(axis, nu_power, eta_power, 4)
+```
+
+```{python}
+MARKERSIZE = 4
+
+eta_powers = [-3, -4]
+nu_powers = [-5, -4, -3]
+models = ["isotropic", "switching"]
+
+lines = {}
+
+fig, axis = create_axes(3)
+
+for eta in eta_powers:
+    for model in models:
+        line_name = str(eta) + model
+        energy = [
+            get_energy(nu, eta, model) for nu in nu_powers
+        ]
+        t_idx = [find_nearest_idx(e.data[:,0], 12.5) for e in energy]
+       
+#         idx = 4
+#         print(line_name)
+#         for t_i, e in zip(t_idx, energy):
+#             t_fix_idx = find_nearest_idx(t, 0.2)
+#             e.data[:,idx] -= e.data[t_fix_idx,idx]
+#             plt.plot(e.data[:,0],e.data[:,idx])
+#             plt.plot(e.data[t_i,0], e.data[t_i,idx], 'x')
+#         plt.show()
+    
+        final_heatings = [energy[i].data[t_idx[i],4] for i in range(3)]
+        
+        x = [10**nu for nu in nu_powers]
+        if model == "switching":
+            linestyle = '--'
+            colour = "C1"
+        else:
+            linestyle = '-'
+            colour = "C0"
+        if eta == -3:
+            markerstyle = "^"
+        else:
+            markerstyle = "v"
+        axis.semilogx(x, final_heatings, linestyle,
+                      color=colour, marker=markerstyle,
+                     markersize = MARKERSIZE)
+
+axis.set_ylim(0, 0.01)
+axis.set_ylabel(r"$Q_{\nu}$")
+axis.set_xlabel(r"$\nu$")
+# plt.show()
+save_plot(outdir + "final_visc_heating.pdf")
+```
+
+```{python}
+def fix_ohmic(heating, shift=10):
+    restart_point = np.argmin(heating[shift:]) + shift
+    heating[restart_point:] += heating[restart_point-1]
+```
+
+```{python}
+eta_powers = [-3, -4]
+nu_powers = [-5, -4, -3]
+models = ["isotropic", "switching"]
+
+lines = {}
+
+fig, axis = create_axes(3)
+
+for eta in eta_powers:
+    for model in models:
+        line_name = str(eta) + model
+        energy = [
+            get_energy(nu, eta, model) for nu in nu_powers
+        ]
+        t_idx = [find_nearest_idx(e.data[:,0], 12.5) for e in energy]
+
+#         print(line_name)
+#         for t_i, e in zip(t_idx, energy):
+#             fix_ohmic(e.data[:,5])
+#             t_fix_idx = find_nearest_idx(t, 0.2)
+#             e.data[:,5] -= e.data[t_fix_idx,5]
+#             plt.plot(e.data[:,0],e.data[:,5])
+#             plt.plot(e.data[t_i,0], e.data[t_i,5], 'x')
+#         plt.show()
+
+        final_ie = [energy[i].data[t_idx[i],5] for i in range(3)]
+        if eta == -3:
+            markerstyle = "^"
+        else:
+            markerstyle = "v"
+            
+        if model == "switching":
+            linestyle = '--'
+            colour = "C1"
+        else:
+            linestyle = '-'
+            colour = "C0"
+            
+        label = r"$\eta = 10^{"+str(eta)+"}$; "+model[:3]
+            
+        x = [10**nu for nu in nu_powers]
+        axis.semilogx(x, final_ie, linestyle,
+                      color=colour, marker=markerstyle,
+                      label=label, markersize = MARKERSIZE)
+
+# axis.set_ylim(0, 0.045)
+axis.set_ylabel(r"$Q_{\eta}$")
+axis.set_xlabel(r"$\nu$")
+# axis.legend(frameon=False)
+# plt.show()
+save_plot(outdir + "final_ohmic_heating.pdf")
+```
+
+```{python}
+eta_powers = [-3, -4]
+nu_powers = [-5, -4, -3]
+models = ["isotropic", "switching"]
+
+lines = {}
+
+fig, axis = create_axes(3)
+
+for eta in eta_powers:
+    for model in models:
+        line_name = str(eta) + model
+        energy = [
+            get_energy(nu, eta, model) for nu in nu_powers
+        ]
+        t_idx = [find_nearest_idx(e.data[:,0], 12.5) for e in energy]
+        
+#         idx = 3
+#         print(line_name)
+#         for t_i, e in zip(t_idx, energy):
+#             t_fix_idx = find_nearest_idx(t, 0.2)
+#             e.data[:,idx] -= e.data[t_fix_idx,idx]
+#             plt.plot(e.data[:,0],e.data[:,idx])
+#             plt.plot(e.data[t_i,0], e.data[t_i,idx], 'x')
+#         plt.show()
+        
+#         for t_i, e in zip(t_idx, energy):
+#             t_fix_idx = find_nearest_idx(t, 0.2)
+#             e0 = e.data[0,3]
+#             e.data[:,3] -= e.data[t_fix_idx,3]
+#             e.data[:,3] += e0
+            
+        final_ie = [energy[i].data[t_idx[i],3] for i in range(3)]
+        if eta == -3:
+            markerstyle = "^"
+        else:
+            markerstyle = "v"
+            
+        if model == "switching":
+            linestyle = '--'
+            colour = "C1"
+        else:
+            linestyle = '-'
+            colour = "C0"
+            
+        label = r"$\eta = 10^{"+str(eta)+"}$; "+model[:3]
+            
+        x = [10**nu for nu in nu_powers]
+        axis.semilogx(x, final_ie, linestyle,
+                      color=colour, marker=markerstyle,
+                      label=label, markersize = MARKERSIZE)
+
+# axis.set_ylim(30.65, 30.7)
+axis.set_ylabel(r"$\varepsilon$")
+axis.set_xlabel(r"$\nu$")
+# axis.legend(frameon=False)
+# plt.show()
+save_plot(outdir + "final_internal_energy.pdf")
+```
+
+```{python}
+def fix_visc(var):
+    var -= var[500]
+```
+
+```{python}
+# fig, axes = create_axes(1, subplots_rows=2, subplots_columns=3, sharex=True, sharey=True)
+
+# labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
+# l_idx = 0
+
+fig, axis = create_axes(2)
+
+for i, eta_power in enumerate([-3]):
+    for j, nu_power in enumerate([-5, -4, -3]):
+        print(eta_power, nu_power)
+        energy = get_energy(nu_power, eta_power, 'isotropic')
+        t = energy.data[:,0]
+        t_idx = find_nearest_idx(t, 0.2)
+        var = energy.data[:,5]
+#         var -= var[t_idx]
+        axis.plot(t, var)
+#         t_idx = find_nearest_idx(t, 12.5)
+#         axis.plot(nu_power, var[t_idx], 'x')
+
+#         axis = axes[i,j]
+#         axis.set_ylim(0.0, 0.001)
+#         axis.set_ylim(30.6, 30.7)
+#         axis.set_xlim(0, 0.5)
+#         y_labels = np.linspace(0, 0.008, 5)
+#         axis.set_yticks(y_labels)
+#         axis.set_yticklabels(y_labels)
+        if eta_power == -4:
+            axis.set_xlabel(r"$t$")
+        if nu_power == -5:
+            axis.set_ylabel(r'KE')
+#         if eta_power == -3 and nu_power == -5:
+#             axis.legend(frameon=False)
+            
+plt.tight_layout()
+plt.show()
+#         save_plot(outdir + "v"+str(nu_power)+"r"+str(eta_power)\
+#                   +"_kinetic_energy.pdf")
+```
+
+# Kinetic energy
+
+```{python}
+def plot_kinetic_energies(axis, nu_power, eta_power, is_log_plot=False):
+    plot_energy(axis, nu_power, eta_power, 2, is_log_plot)
+```
+
+```{python}
+# fig, axes = create_axes(1, subplots_rows=2, subplots_columns=3, sharex=True, sharey=True)
+
+# labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
+# l_idx = 0
+
+for i, eta_power in enumerate([-3, -4]):
+    for j, nu_power in enumerate([-5, -4, -3]):
+        fig, axis = create_axes(3)
+        plot_kinetic_energies(axis, nu_power, eta_power)
+        
+#         axis = axes[i,j]
+        axis.set_ylim(0.0, 0.008)
+        axis.set_xlim(0, 15)
+        y_labels = np.linspace(0, 0.008, 5)
+        axis.set_yticks(y_labels)
+        axis.set_yticklabels(y_labels)
+        if eta_power == -4:
+            axis.set_xlabel(r"$t$")
+        if nu_power == -5:
+            axis.set_ylabel(r'KE')
+        if eta_power == -3 and nu_power == -5:
+            axis.legend(frameon=False)
+            
+        plt.tight_layout()
+        save_plot(outdir + "v"+str(nu_power)+"r"+str(eta_power)\
+                  +"_kinetic_energy.pdf")
+```
+
+# Why is eta=e-3 so different
+
+```{python}
+xlim=1.5
+ylim=1.5
+xlim=2.0
+ylim=0.25
+slice_dim='x'
+slice_loc=0.0
+i = 10
+
+# visc_powers = [-3, -4, -5]
+# resist_powers = [-3, -4]
+
+visc_powers = [-5, -4, -3]
+resist_powers = [-3, -4]
+
+# fig, axis = create_axes(2)
+
+for eta in resist_powers:   
+    for nu in visc_powers:
+        print(eta,  nu)
+        # Load SDF files
+        folder = data_folder + parameter_study_folder
+        iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(i, nu, eta, folder)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        iso_image = get_variable_slice(
+            iso_sdf, "magnitude_current_density", slice_dim, slice_loc).T
+        swi_image = get_variable_slice(
+            swi_sdf, "magnitude_current_density", slice_dim, slice_loc).T
+
+        iso_image *= 10**eta * iso_image
+        swi_image *= 10**eta * swi_image
+        
+        vmax = max(iso_image.max(), swi_image.max())
+        vmin = min(iso_image.min(), swi_image.min())
+#         vmax = 0.2
+#         vmin = 0
+
+#         if eta == -3:
+#             marker = '.'
+#         else:
+#             marker = 'x'
+            
+#         axis.plot(nu, np.sum(iso_image), marker)
+
+        fig, axes = create_axes(1, subplots_columns=2)
+        im = axes[0].imshow(iso_image, cmap="viridis", 
+                            extent=extents, origin='lower',
+                           vmax=vmax, vmin=vmin)
+        im = axes[1].imshow(swi_image, cmap="viridis", 
+                            extent=extents, origin='lower',
+                           vmax=vmax, vmin=vmin)
+
+        attach_colorbar(axes[1], im)
+        for axis in axes:
+            axis.set_xlim((-xlim, xlim))
+            axis.set_ylim((-ylim, ylim))
+
+        plt.show()
+```
+
+```{python}
+xlim=1.5
+ylim=1.5
+# xlim=0.25
+# ylim=0.25
+slice_dim='x'
+slice_loc=0.0
+i = 10
+
+# visc_powers = [-3, -4, -5]
+# resist_powers = [-3, -4]
+
+visc_powers = [-5, -4, -3]
+resist_powers = [-3, -4]
+
+total = {str(eta)+str(nu):0
+         for eta in resist_powers
+        for nu in visc_powers}
+
+heating = {}
+
+
+for slice_dim in ['x', 'z']:
+    for eta in resist_powers:   
+        for nu in visc_powers:
+            print(eta,  nu)
+            # Load SDF files
+            folder = data_folder + parameter_study_folder
+            iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(i, nu, eta, folder)
+
+            extents = get_slice_extents(iso_sdf, slice_dim)
+
+            iso_image = get_variable_slice(
+                iso_sdf, "magnitude_current_density", slice_dim, slice_loc).T
+    #         swi_image = get_variable_slice(
+    #             swi_sdf, "magnitude_current_density", slice_dim, slice_loc).T
+
+            iso_image *= 10**eta * iso_image
+    #         swi_image *= 10**eta * swi_image
+                
+            heating[str(eta)+str(nu)+slice_dim] = np.mean(iso_image)
+
+#             axis.plot(nu, np.mean(iso_image), marker, linestyle=linestyle)
+#             axis.set_ylim(0, 0.005)
+
+#     plt.show()
+```
+
+```{python}
+total = {eta:[0,0,0] for eta in resist_powers}
+    
+for eta in resist_powers:
+    fig, axis = create_axes(2)
+    for slice_dim in ['x', 'z']:
+        linestyle = ':'
+        label = "spine"
+        if slice_dim == 'z':
+            linestyle = '--'
+            label = "fan"
+
+        heating_array = [heating[str(eta) + str(nu)+slice_dim]
+                        for nu in visc_powers]
+        
+        for i in range(3):
+            total[eta][i] += heating_array[i]
+        
+        x = [10**nu for nu in visc_powers]
+        axis.semilogx(x, heating_array, marker,
+                  linestyle = linestyle, label=label)
+        
+    linestyle='-'
+        
+    x = [10**nu for nu in visc_powers]
+    axis.semilogx(x, total[eta], marker,
+                  linestyle = linestyle, label='total')
+    
+    axis.set_ylim(0, 8e-3)
+    axis.set_xlabel(r'$\nu$')
+    axis.set_ylabel(r'$\overline{Q}_{\eta}$')
+    if eta == -3:
+        axis.legend(frameon=False)
+    # plt.show()
+    save_plot(outdir+"balance_of_ohmic_heating"+str(eta)+".pdf")
+```
+
+# Ring properties
+
+```{python}
+# Settings
+
+r_min = 0.3
+r_max = 2.0
+z_min = -0.25
+z_max = 0.25
+```
+
+```{python}
+def calc_ring_properties(sdfFile, ring_var, 
+                         check_slices=False, fix_peak=None):
+    if ring_var == "vorticity":
+        ring_variable = "vorticity_density"
+        shear_variable = "Velocity_Vx"
+    elif ring_var == "current":
+        ring_variable = "magnitude_current_density"
+        shear_variable = "Magnetic_Field_Bx"
+    
+    extents = [r_min, r_max, z_min, z_max]
+
+    # create slice indices
+    r_min_idx = length_to_index(sdfFile, r_min, "x")
+    r_max_idx = length_to_index(sdfFile, r_max, "x")
+    mid_point = length_to_index(sdfFile, 0.0, "z")
+    
+#     print(r_min_idx, r_max_idx)
+
+    # Slice variable
+    var_slice = get_variable_slice(sdfFile, ring_variable, "x", 0.0).T
+    var_slice = var_slice[:,r_min_idx:r_max_idx]
+
+    # Find peak in radial direction
+    z_slice = var_slice[mid_point]
+    if fix_peak:
+        r_peak_loc = length_to_index(sdfFile, fix_peak, "x") - r_min_idx
+    else:
+        r_peak_loc = np.argmax(z_slice)
+    real_peak_loc = index_to_length(sdfFile, r_peak_loc+r_min_idx, "x")
+#     radial_extent = index_to_length(sdfFile, peak_widths(z_slice, [r_peak_loc], 1.0/3.0)[0][0], "x", relative=True)
+    peak_magnitude = np.max(z_slice)
+
+    # Plot radial direction
+    # fig, axis = create_axes(1)
+    # axis.plot(z_slice)
+    # axis.plot(r_peak_loc, z_slice[r_peak_loc], 'x')
+    # plt.show()
+
+    # Find peak in z direction
+    # r_slice = var_slice[:, r_peak_loc]
+    # z_peak_loc = np.argmax(r_slice)
+    z_peak_loc = 0.0
+
+    # fig, axis = create_axes(1)
+    # axis.plot(r_slice)
+    # axis.plot(z_peak_loc, r_slice[z_peak_loc], 'x')
+    # plt.show()
+
+    # Plot slice
+    if check_slices:
+        fig, axis = create_axes(1)
+        im = axis.imshow(var_slice, cmap="coolwarm", extent=extents,
+                         origin='lower', interpolation='bilinear')
+        attach_colorbar(axis, im)
+        # axis.set_xlim((-xlim, xlim))
+        # axis.set_ylim((-ylim, ylim))
+        axis.plot(real_peak_loc, 0.0, 'x')
+        plt.show()
+
+    # Slice velocity
+    var_slice = get_variable_slice(sdfFile, shear_variable, "x", 0.0).T
+    var_slice = var_slice[:,r_min_idx:r_max_idx]
+
+#     fig, axis = create_axes(1)
+#     im = axis.imshow(var_slice, cmap="coolwarm", extent=extents,
+#                      origin='lower', interpolation='bilinear')
+#     attach_colorbar(axis, im)
+#     # axis.set_xlim((-xlim, xlim))
+#     # axis.set_ylim((-ylim, ylim))
+#     axis.plot(real_peak_loc, 0.0, 'x')
+#     plt.show()
+
+    # Find peak in z direction
+    r_slice = var_slice[:, r_peak_loc]
+    z_peak_loc = np.argmax(r_slice)
+    z_trough_loc = np.argmin(r_slice)
+    # layer_thickness = abs(z_peak_loc - z_trough_loc)
+    layer_thickness = index_to_length(sdfFile, abs(z_peak_loc - z_trough_loc), "z", relative=True)
+
+    shear_magnitude = abs(r_slice[z_peak_loc] - r_slice[z_trough_loc])
+
+    if check_slices:
+        fig, axis = create_axes(1)
+        axis.plot(r_slice)
+        axis.plot(z_peak_loc, r_slice[z_peak_loc], 'x')
+        axis.plot(z_trough_loc, r_slice[z_trough_loc], 'x')
+        plt.show()
+      
+    # Actually calculate peak location
+    r_peak_loc = np.argmax(z_slice)
+    real_peak_loc = index_to_length(sdfFile, r_peak_loc+r_min_idx, "x")
+    
+    if check_slices:
+        print("Peak location:", real_peak_loc)
+    #     print("Radial extent:", radial_extent)
+        print("Layer thickness:", layer_thickness)
+        print("Peak magnitude:", peak_magnitude)
+        print("Shear magnitude:", shear_magnitude)
+    
+    return real_peak_loc, layer_thickness, peak_magnitude, shear_magnitude
+```
+
+We calculate the ring properties for the vorticity and current rings independently, then combine in appropriate graphs
+
+```{python}
+i=8
+```
+
+```{python}
+slice_dim = 'x'
+slice_loc = 0.0
+
+visc_powers = [-5, -4, -3]
+resist_powers = [-4, -3]
+
+vort_peak_locs = {}
+vort_layer_thicknesses = {}
+vort_peak_mags = {}
+vort_shear_mags = {}
+
+for visc_mode in ["isotropic", "switching"]:
+    for eta in resist_powers:
+        line_name = str(eta) + visc_mode
+        vort_peak_locs[line_name] = []
+        vort_layer_thicknesses[line_name] = []          
+        vort_peak_mags[line_name] = []
+        vort_shear_mags[line_name] = []
+        for nu in visc_powers:
+            print(nu, eta, visc_mode)
+            # Load SDF file
+            run_folder = "v" + str(nu) + "r" + str(eta) + "-" + visc_mode
+            folder = data_folder + parameter_study_folder + run_folder + "/Data/"
+            timedump = '{0:04d}'.format(i)
+            sdfFilename = folder + timedump + ".sdf"
+            sdfFile = sdf.read(sdfFilename)
+
+            # Calculate ring properties
+            peak_loc, layer_thickness, peak_mag, shear_mag = \
+                calc_ring_properties(sdfFile, "vorticity",
+                                     check_slices=False, fix_peak=None)
+            
+            # Add to lines
+            vort_peak_locs[line_name] += [peak_loc]
+            vort_layer_thicknesses[line_name] += [layer_thickness]            
+            vort_peak_mags[line_name] += [peak_mag] 
+            vort_shear_mags[line_name] += [shear_mag]
+```
+
+```{python}
+slice_dim = 'x'
+slice_loc = 0.0
+
+visc_powers = [-5, -4, -3]
+resist_powers = [-4, -3]
+
+mag_peak_locs = {}
+mag_layer_thicknesses = {}
+mag_peak_mags = {}
+mag_shear_mags = {}
+
+for visc_mode in ["isotropic", "switching"]:
+    for eta in resist_powers:
+        line_name = str(eta) + visc_mode
+        mag_peak_locs[line_name] = []
+        mag_layer_thicknesses[line_name] = []          
+        mag_peak_mags[line_name] = []
+        mag_shear_mags[line_name] = []
+        for nu in visc_powers:
+            print(nu, eta, visc_mode)
+            # Load SDF file
+            run_folder = "v" + str(nu) + "r" + str(eta) + "-" + visc_mode
+            folder = data_folder + parameter_study_folder + run_folder + "/Data/"
+            timedump = '{0:04d}'.format(i)
+            sdfFilename = folder + timedump + ".sdf"
+            sdfFile = sdf.read(sdfFilename)
+
+            # Calculate ring properties
+            peak_loc, layer_thickness, peak_mag, shear_mag = \
+                calc_ring_properties(sdfFile, "current",
+                                     check_slices=False, fix_peak=None)
+            
+            # Add to lines
+            mag_peak_locs[line_name] += [peak_loc]
+            mag_layer_thicknesses[line_name] += [layer_thickness]            
+            mag_peak_mags[line_name] += [peak_mag] 
+            mag_shear_mags[line_name] += [shear_mag]
+```
+
+```{python active="", eval=FALSE}
+# Plot lines    
+fig, axes = create_axes(1, subplots_rows=2, subplots_columns=2, sharex=True)
+# fig, axes = plt.subplots(2, 2, figsize=(10,10))
+
+visc_line_styles = {'isotropic':'-', 'switching':'--'}
+visc_colours = {'isotropic':'C0', 'switching':'C1'}
+eta_markers = {-3:'^', -4:'v', -5:'v'}
+labels = {
+    '-3isotropic':'iso; $\eta=10^{-3}$',
+    '-4isotropic':'iso; $\eta=10^{-4}$',
+    '-3switching':'swi; $\eta=10^{-3}$',
+    '-4switching':'swi; $\eta=10^{-3}$',
+}
+
+markersize = 5.0
+
+for visc_mode in ["isotropic", "switching"]:
+    for eta in [-3,-4]:
+        line_name = str(eta) + visc_mode
+        axes[0,0].plot(visc_powers, vort_peak_locs[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+
+        axes[0,1].plot(visc_powers, mag_peak_locs[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      label=labels[line_name],
+                      markersize=markersize)
+        
+        axes[1,0].plot(visc_powers, vort_peak_mags[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+        
+        axes[1,1].plot(visc_powers, mag_peak_mags[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+        
+axes[0,0].set_ylabel(r"$r_{max\ |\omega|}$")
+axes[0,1].set_ylabel(r"$r_{max\ |\jmath|}$")
+axes[0,0].set_ylim(0, 2.0)
+axes[0,1].set_ylim(0, 2.0)
+axes[1,0].set_ylabel(r"$max\ |\omega|$")
+axes[1,1].set_ylabel(r"$max\ |\jmath|$")
+axes[1,0].set_ylim(0, 125)
+axes[1,1].set_ylim(0, 20)
+
+axes[1,0].set_xlabel(r"log$_{10}\nu$")
+axes[1,1].set_xlabel(r"log$_{10}\nu$")
+
+axes[0,1].legend(frameon=False)
+
+axes[0,0].set_xticks([-5, -4, -3])
+axes[0,0].set_yticks(np.linspace(0, 2, 5))
+axes[0,1].set_yticks(np.linspace(0, 2, 5))
+axes[1,1].set_yticks(np.linspace(0, 20, 5))
+
+plt.tight_layout()
+
+save_plot(outdir + "peak_mag_and_loc.pdf")
+```
+
+```{python}
+# Plot lines    
+
+# fig, axes = plt.subplots(2, 2, figsize=(10,10))
+
+visc_line_styles = {'isotropic':'-', 'switching':'--'}
+visc_colours = {'isotropic':'C0', 'switching':'C1'}
+eta_markers = {-3:'^', -4:'v', -5:'v'}
+labels = {
+    '-3isotropic':'iso; $\eta=10^{-3}$',
+    '-4isotropic':'iso; $\eta=10^{-4}$',
+    '-3switching':'swi; $\eta=10^{-3}$',
+    '-4switching':'swi; $\eta=10^{-3}$',
+}
+
+markersize = 5.0
+x = [10**nu for nu in visc_powers]
+
+fig, axis = create_axes(2)
+for visc_mode in ["isotropic", "switching"]:
+    for eta in [-3,-4]:
+        line_name = str(eta) + visc_mode
+        axis.semilogx(x, vort_peak_mags[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize,
+                 label = r"$\eta = 10^{"+str(eta)+"}$; "+visc_mode[:3])
+        
+axis.set_ylabel(r"$max\ |\omega|$")
+axis.set_ylim(0, 140)
+axis.set_xlabel(r"$\nu$")
+axis.legend(frameon=False)
+
+save_plot(outdir + "peak_vort.pdf")   
+
+fig, axis = create_axes(2)
+for visc_mode in ["isotropic", "switching"]:
+    for eta in [-3,-4]:
+        line_name = str(eta) + visc_mode
+        axis.semilogx(x, mag_peak_mags[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+        
+axis.set_ylabel(r"$max\ |\jmath|$")
+axis.set_ylim(0, 20)
+axis.set_xlabel(r"$\nu$")
+
+save_plot(outdir + "peak_current.pdf")   
+```
+
+```{python}
+# Plot lines    
+fig, axes = create_axes(1, subplots_rows=2, subplots_columns=2, sharex=True)
+
+labels = {
+    '-3isotropic':'iso; $\eta=10^{-3}$',
+    '-4isotropic':'iso; $\eta=10^{-4}$',
+    '-3switching':'swi; $\eta=10^{-3}$',
+    '-4switching':'swi; $\eta=10^{-3}$',
+}
+
+visc_line_styles = {'isotropic':'-', 'switching':'--'}
+visc_colours = {'isotropic':'C0', 'switching':'C1'}
+eta_markers = {-3:'^', -4:'v', -5:'v'}
+
+markersize=5.0
+
+for visc_mode in ["isotropic", "switching"]:
+    for eta in [-3,-4]:
+        line_name = str(eta) + visc_mode
+        axes[0,0].plot(visc_powers, vort_layer_thicknesses[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      label=labels[line_name],
+                      markersize=markersize)
+
+        axes[0,1].plot(visc_powers, mag_layer_thicknesses[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+        
+        axes[1,0].plot(visc_powers, vort_shear_mags[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+        
+        axes[1,1].plot(visc_powers, mag_shear_mags[line_name],
+                      visc_line_styles[visc_mode],
+                      color = visc_colours[visc_mode],
+                      marker=eta_markers[eta],
+                      markersize=markersize)
+        
+axes[0,0].set_ylabel(r"$L_u$")
+axes[0,1].set_ylabel(r"$L_B$")
+axes[0,0].set_ylim(0, 0.13)
+axes[0,1].set_ylim(0, 0.13)
+
+axes[1,0].set_ylabel(r"$\Delta u$")
+axes[1,1].set_ylabel(r"$\Delta B$")
+axes[1,0].set_ylim(0, 0.5)
+axes[1,1].set_ylim(0, 0.5)
+
+axes[1,0].set_xlabel(r"log$_{10}\nu$")
+axes[1,1].set_xlabel(r"log$_{10}\nu$")
+
+axes[0,0].legend(frameon=False)
+
+plt.tight_layout()
+
+save_plot(outdir + "layer_thickness_and_shear.pdf")
+```
+
+# Reconnection rate
+
+```{python}
+side_length = 0.1
+z_level = 0.23
+
+def calc_reconnection_rate(sdfFile, h=None):
+    mag_field = load_magnetic_field(sdfFile)                                                     
+    pef_data = calculate_parallel_electric_field(mag_field)
+    pef_field = ScalarField(pef_data, mag_field.extents)
+
+    result, _ = run_field_line_integrator(mag_field, pef_field, z_level, side_length, h=h)
+
+    return result
+```
+
+```{python}
+visc_powers = [-5, -4, -3]
+resist_powers = [-4, -3]
+
+results = {}
+
+for visc_mode in ["isotropic", "switching"]:
+    for eta in resist_powers:
+        for nu in visc_powers:
+            line_name = str(nu) + str(eta) + visc_mode
+            print(line_name)
+            results[line_name] = [0]
+            for t in range(1, 16):
+                print(t)
+                sdf_file= fetch_sdffile(t, nu, eta, data_folder + parameter_study_folder, visc_mode)
+                results[line_name] += [np.max(np.abs(calc_reconnection_rate(sdf_file, h=0.01)))]
+```
+
+```{python}
+fig, axes = create_axes(1, subplots_rows=2, subplots_columns=3, sharex=True)
+
+labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
+l_idx = 0
+
+time = range(0, 16)
+
+for i, eta_power in enumerate([-3, -4]):
+    for j, nu_power in enumerate([-5, -4, -3]):
+        for visc_mode in ['isotropic', 'switching']:
+            line_name = str(nu_power) + str(eta_power) + visc_mode
+            axis = axes[i,j]
+            
+            axis.plot(time, results[line_name], marker='.', label=visc_mode)
+
+            axis.set_xlim(0, 15.5)
+            
+#             axis.text(0.5, 0.009, r"$\nu=10^{"+str(nu_power)+"}, \eta=10^{"+str(eta_power)+"}$")
+
+        
+for axis in [axes[0,1], axes[0,2], axes[1,1], axes[1,2]]:
+    axis.set_yticklabels([])
+
+for axis in axes[0]:
+    axis.set_ylim(0, 2.5)
+    axis.text(1, 2.3, r"("+labels[l_idx]+")")
+    l_idx +=1
+    
+for axis in axes[1]:
+    axis.set_ylim(0, 17)
+    axis.set_xlabel(r"$t$")
+    axis.text(1, 16, r"("+labels[l_idx]+")")
+    l_idx +=1
+    
+axes[0,0].set_ylabel(r"max$\Phi$")
+axes[1,0].set_ylabel(r"max$\Phi$")
+
+axes[0,0].legend(frameon=False)
+
+plt.tight_layout()
+
+save_plot(outdir + "reconnection_rate.pdf")
+```
+
+# Mach numbers
+
+
+We calculate the Mach numbers for every isotropic/switching pair of simulations over the (nu, eta) parameter range of [(-5, -3), (-4, -4) and (-3, -5)]
+
+```{python}
+def plot_mach_numbers(run_folders, output, upper_limits, include_legend=False, labels=None):
+    r_min = 0.2
+    r_max = 1.6
+
+    z_min = -0.1
+    z_max = 0.1
+
+    linestyles = ['-', '--', ':']
+    colours = ['k', 'k', 'k']
+    if not labels:
+        labels = [r'$\nu = 10^{-5}$', r'$\nu = 10^{-4}$', r'$\nu = 10^{-3}$']
+    # labels = [r'$\nu = 10^{-5}, \eta = 10^{-4}$', r'$\nu = 10^{-4}, \eta = 10^{-4}$', r'$\nu = 10^{-3}, \eta = 10^{-4}$']
+
+    for i in [8]:
+        fig, axes = create_axes(2, subplots_rows=3, sharex=True)
+        for j, run_folder in enumerate(run_folders):
+            print(run_folder)
+            sdf_folder = data_folder + parameter_study_folder + run_folder + "/Data/"
+            sdfFile = sdf.read(format_filename(sdf_folder, i))
+            fast_mach, alfven_mach, delta1 = \
+            calc_mach_numbers(sdfFile, r_min, r_max, z_min, z_max)
+            r = np.linspace(r_min, r_max, num=fast_mach.size)
+            axes[0].plot(r, fast_mach, linestyles[j], label=labels[j],
+                        color=colours[j])
+            axes[2].plot(r, alfven_mach, linestyles[j])
+            axes[1].plot(r, delta1, linestyles[j],
+                        color=colours[j], label=labels[j])
+            straight_line = np.zeros_like(r) + 1.0
+            axes[1].plot((0, r_max), (1.0, 1.0), 'k', linewidth=0.5)
+            axes[0].set_ylabel(r"$M_f$")
+            axes[1].set_ylabel(r"$\Delta$")
+
+        axes[1].set_xlim(0, r_max)
+        axes[1].set_xlabel(r"$r$")
+        axes[0].set_ylim(0, upper_limits[0])
+        axes[1].set_ylim(0, upper_limits[1])
+        if include_legend:
+            axes[0].legend(frameon=False)
+        save_plot(outdir + output)
+```
+
+```{python}
+eta_4_switching = ["v-5r-4-switching", "v-4r-4-switching", "v-3r-4-switching"]
+plot_mach_numbers(eta_4_switching, "mach_numbers_eta_4_swi.pdf", [0.5, 3.5])
+```
+
+```{python}
+eta_4_isotropic = ["v-5r-4-isotropic", "v-4r-4-isotropic", "v-3r-4-isotropic"]
+plot_mach_numbers(eta_4_isotropic, "mach_numbers_eta_4_iso.pdf", [0.5, 3.5])
+```
+
+```{python}
+eta_3_switching = ["v-5r-3-switching", "v-4r-3-switching", "v-3r-3-switching"]
+plot_mach_numbers(eta_3_switching, "mach_numbers_eta_3_swi.pdf", [0.5, 5])
+```
+
+```{python}
+eta_3_isotropic = ["v-5r-3-isotropic", "v-4r-3-isotropic", "v-3r-3-isotropic"]
+plot_mach_numbers(eta_3_isotropic, "mach_numbers_eta_3_iso.pdf", [0.5, 5], include_legend=True)
+```

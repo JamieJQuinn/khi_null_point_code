@@ -1,0 +1,317 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.3.4
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python}
+import numpy as np
+import numpy.ma as ma
+import scipy.ndimage
+import sys
+import math
+import importlib
+import matplotlib.pyplot as plt
+# %matplotlib inline
+
+from plotting_parameters import *
+
+sys.path.insert(0,'../shared')
+from plotting import *
+from sdf_helper import *
+
+import fan_plane_integrator
+importlib.reload(fan_plane_integrator)
+from fan_plane_integrator import *
+
+data_folder = "/nas/1101974q/archie-latest-organisation-sept-2018/null-point-stressing/twisting-driver"
+p_study_folder = "/parameter-study/"
+```
+
+```{python}
+def format_filename(folder, dump_number):
+    return folder + '{0:04d}'.format(dump_number) + ".sdf"
+```
+
+```{python}
+def plot_radial_mean(mean, r_min, r_max, z_min, z_max):
+    fig = plt.figure()
+    grid = plt.GridSpec(2, 5, hspace=0.2, wspace=0.2)
+
+    main_ax = fig.add_subplot(
+        grid[1, :-1],
+        xticks=np.linspace(r_min, r_max, 5),
+        yticks=[z_min, 0, z_max]
+    )
+
+    y_hist = fig.add_subplot(grid[-1, -1], sharey=main_ax)
+    x_hist = fig.add_subplot(grid[0, :-1], sharex=main_ax)
+
+    plt.setp(x_hist.get_xticklabels(), visible=False)
+    plt.setp(y_hist.get_yticklabels(), visible=False)
+
+    main_ax.imshow(
+        np.transpose(mean),
+        extent = (r_min, r_max, z_min, z_max),
+        aspect='auto'
+    )
+    main_ax.set_xlim(r_min, r_max)
+
+    # c = axes[1,0].imshow(np.transpose(integration),
+    #            extent = (0, 2.0, limits[4], limits[5]))
+    # fig.colorbar(c, ax=axes[1,0], orientation='horizontal')
+
+    r = np.linspace(r_min, r_max, num=mean.shape[0])
+    z = np.linspace(z_min, z_max, num=mean.shape[1])
+
+    z0_idx = int(mean.shape[1]/2)
+
+    plane_slice = mean[:, z0_idx]
+
+    x_hist.plot(r, plane_slice)
+    x_hist.set_xlim(r_min, r_max)
+
+    peaks, _ = find_peaks(plane_slice)
+    x_hist.plot(r[peaks], plane_slice[peaks], 'x')
+
+    biggest_peak = peaks[np.argmax(plane_slice[peaks])]
+
+    z_slice = mean[biggest_peak,:]
+    peaks, _ = find_peaks(z_slice, height=plane_slice[biggest_peak]/2)
+    y_hist.plot(z_slice, z)
+    y_hist.plot(z_slice[peaks], z[peaks], 'x')
+    y_hist.set_ylim(z_min, z_max)
+
+    # biggest_peak = np.argmax(z_slice[peaks])
+
+    # widths = peak_widths(z_slice, peaks)
+    # print(widths[0]/res[2]*(limits[5] - limits[4]))
+    # plt.plot(z[peaks], widths[0]/res[2]*(limits[5] - limits[4]))
+    # plt.show()
+
+    plt.show()
+
+```
+
+```{python}
+# Averaging settings
+r_min = 0
+r_max = 2.0
+z_min = -0.1
+z_max = 0.1
+```
+
+```{python}
+run_folder = "v-3r-3-switching"
+sdf_folder = data_folder + p_study_folder + run_folder + "/Data/"
+
+for i in range(1, 16):
+    sdfFile = sdf.read(format_filename(sdf_folder, i))
+    
+    r_limits, z_limits = get_r_z_limits(sdfFile, r_min, r_max, z_min, z_max)
+
+    data = get_variable_data(sdfFile, "magnitude_current_density")
+
+    mean = calc_angular_mean(data, r_limits, z_limits)
+    plot_radial_mean(mean, r_min, r_max, z_min, z_max)
+```
+
+```{python}
+run_folder = "v-3r-4-switching"
+sdf_folder = data_folder + p_study_folder + run_folder + "/Data/"
+
+for i in range(1, 10):
+    print(i)
+    sdfFile = sdf.read(format_filename(sdf_folder, i))
+
+    # data = calc_kinetic_energy_z(sdfFile)
+    data = np.abs(get_variable_data(sdfFile, "Velocity_Vz"))
+    
+    z0_idx = int(data.shape[2]/2)
+    plt.imshow(data[:,:,z0_idx])
+    plt.show()
+```
+
+```{python}
+run_folder = "v-4r-4-switching"
+sdf_folder = data_folder + p_study_folder + run_folder + "/Data/"
+
+for i in range(1, 15):
+    print(i)
+    sdfFile = sdf.read(format_filename(sdf_folder, i))
+    
+    r_limits, z_limits = get_r_z_limits(sdfFile, r_min, r_max, z_min, z_max)
+
+
+    # data = calc_kinetic_energy_z(sdfFile)
+#     data = get_variable_data(sdfFile, "kinetic_energy_z")
+    data = np.abs(get_variable_data(sdfFile, "Velocity_Vz"))
+    
+    z0_idx = int(data.shape[2]/2)
+    plt.imshow(data[:,:,z0_idx])
+    plt.show()
+
+    mean = calc_angular_mean(data, r_limits, z_limits)
+#     mean = data[int(data.shape[0]/2):, int(data.shape[1]/2), z_limits[0]:z_limits[1]]
+    plot_radial_mean(mean, r_min, r_max, z_min, z_max)
+```
+
+```{python}
+def calc_means(means, time_idx):
+    for run_folder in means:
+        print(run_folder)
+        sdf_folder = data_folder + p_study_folder + run_folder + "/Data/"
+        sdfFile = sdf.read(format_filename(sdf_folder, time_idx))
+        extents = get_extents(sdfFile)
+
+        r_limits, z_limits = get_r_z_limits(sdfFile, r_min, r_max, z_min, z_max)
+
+        for variable in means[run_folder]:
+            print(variable)
+            means[run_folder][variable] = \
+                calc_angular_mean(
+                    get_variable_data(sdfFile, variable),
+                    r_limits, z_limits
+                )
+
+def plot_means(means, linestyles):
+    fig, axes = plt.subplots(3, 1, sharex=True)
+
+    for j, run_folder in enumerate(means):
+        for i, variable in enumerate(means[run_folder]):
+            mean = means[run_folder][variable]
+            z0_idx = int(mean.shape[1]/2)
+            plane_slice = mean[:, z0_idx]
+            r = np.linspace(r_min, r_max, num=mean.shape[0])
+
+            axes[i].plot(r, plane_slice,
+                     label=run_folder,
+                     linestyle=linestyles[j],
+                     color='k'
+                    )
+            axes[i].set_title(variable)
+
+    plt.legend()
+    plt.show() 
+    fig.savefig("../../images/null_point_khi/azimuthal_averages_v-3_"+time_idx+".pdf")
+```
+
+```{python}
+variables = [
+    "magnitude_current_density",
+    "vorticity_density",
+    "abs_Velocity_Vz"
+]
+
+run_folders = ["v-3r-3-switching", "v-3r-4-switching", "v-3r-5-switching"]
+
+means_over_time = {
+    str(time_idx): {
+        run_folder: {
+            var:None for var in variables
+        } for run_folder in run_folders
+    } for time_idx in range(1, 11)
+}
+
+for time_idx in means_over_time:
+    print(time_idx)
+    calc_means(means_over_time[time_idx], int(time_idx))
+```
+
+```{python}
+linestyles = ['dotted', 'dashed', 'solid']
+colours = ['r', 'b', 'k']
+
+# print(means_over_time)
+
+for time_idx in means_over_time:
+    print(time_idx)
+    plot_means(means_over_time[time_idx], linestyles)
+
+```
+
+# Calculating Mach numbers
+
+```{python}
+r_min = 0.2
+r_max = 2.0
+
+z_min = -0.1
+z_max = 0.1
+
+linestyles = ['-', '--', ':']
+colours = ['C2', 'C3', 'C4']
+labels = [r'$\nu = 10^{-5}, \eta = 10^{-3}$', r'$\nu = 10^{-4}, \eta = 10^{-4}$', r'$\nu = 10^{-3}, \eta = 10^{-5}$']
+
+for i in [8]:
+    print(i)
+    fig, axes = create_axes(1, subplots_rows=2, sharex=True)
+    for j, run_folder in enumerate(["v-5r-3-switching", "v-4r-4-switching", "v-3r-5-switching"]):
+        print(run_folder)
+        sdf_folder = data_folder + p_study_folder + run_folder + "/Data/"
+        sdfFile = sdf.read(format_filename(sdf_folder, i))
+        fast_mach, alfven_mach, delta1 = \
+        calc_mach_numbers(sdfFile, r_min, r_max, z_min, z_max)
+        r = np.linspace(r_min, r_max, num=fast_mach.size)
+        axes[0].plot(r, fast_mach, linestyles[j], label=labels[j],
+                    color=colours[j])
+#         axes[1].plot(r, alfven_mach, linestyles[j])
+        axes[1].plot(r, delta1, linestyles[j],
+                    color=colours[j])
+        straight_line = np.zeros_like(r) + 1.0
+        axes[1].plot(r, straight_line, 'k', linewidth=0.5)
+        axes[0].set_ylabel(r"$M_f$")
+#         axes[1].set_title("alfven_mach")
+        axes[1].set_ylabel(r"$\Delta$")
+    axes[0].set_xlim(r_min, r_max)
+    axes[1].set_xlim(r_min, r_max)
+    axes[0].set_ylim(0, 0.5)
+    axes[1].set_ylim(0, 5)
+    plt.legend()
+    plt.show()
+#     fig.savefig("../../images/null_point_khi/mach_numbersv-3" + str(i) + ".pdf")
+```
+
+```{python}
+r_min = 0.2
+r_max = 2.0
+
+z_min = -0.1
+z_max = 0.1
+
+linestyles = ['-', '--', ':']
+colours = ['C2', 'C3', 'C4']
+labels = [r'$\nu = 10^{-5}, \eta = 10^{-3}$', r'$\nu = 10^{-4}, \eta = 10^{-4}$', r'$\nu = 10^{-3}, \eta = 10^{-5}$']
+
+for i in [8]:
+    print(i)
+    fig, axes = create_axes(2, subplots_rows=2)
+    for j, run_folder in enumerate(["v-5r-3-isotropic", "v-4r-4-isotropic", "v-3r-5-isotropic"]):
+        print(run_folder)
+        sdf_folder = data_folder + p_study_folder + run_folder + "/Data/"
+        sdfFile = sdf.read(format_filename(sdf_folder, i))
+        fast_mach, alfven_mach, delta1 = \
+        calc_mach_numbers(sdfFile, r_min, r_max, z_min, z_max)
+        r = np.linspace(r_min, r_max, num=fast_mach.size)
+        axes[0].plot(r, fast_mach, linestyles[j],
+                     label=labels[j], color=colours[j])
+#         axes[1].plot(r, alfven_mach, linestyles[j])
+        axes[1].plot(r, delta1, linestyles[j],
+                    color=colours[j])
+        straight_line = np.zeros_like(r) + 1.0
+        axes[1].plot(r, straight_line, 'k', linewidth=0.5)
+        axes[0].set_ylabel(r"$M_f$")
+#         axes[1].set_title("alfven_mach")
+        axes[1].set_ylabel(r"$\Delta$")
+    fig.legend()
+    plt.show()
+#     fig.savefig("../../images/null_point_khi/mach_numbersv-3" + str(i) + ".pdf")
+```

@@ -1,0 +1,203 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.6.0
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python}
+import sys
+import time
+import os.path
+
+from pyevtk.hl import imageToVTK
+
+import numpy as np
+import sdf
+import importlib
+
+data_folder = "/nas/1101974q/archie-latest-organisation-sept-2018/null-point-stressing/twisting-driver/high-resolution/"
+```
+
+```{python}
+# These are the indices that set the output limits of +- x and y
+X_MIN = 275
+X_MAX = 365
+Z_MIN = 0
+Z_MAX = 640
+```
+
+```{python}
+def differentiate(var, dim, dx):
+    # This will differentiate AND set to the same size in all dims
+    if dim == "x":
+        return (var[2:, 1:-1, 1:-1] - var[:-2, 1:-1, 1:-1])/(2.0*dx)
+    elif dim == "y":
+        return (var[1:-1, 2:, 1:-1] - var[1:-1, :-2, 1:-1])/(2.0*dx)
+    elif dim == "z":
+        return (var[1:-1, 1:-1, 2:] - var[1:-1, 1:-1, :-2])/(2.0*dx)
+```
+
+```{python}
+def preprocess_magnetic_field(sdfFilename, outfname, x_min=X_MIN, x_max=X_MAX):
+    sdffile = sdf.read(sdfFilename)
+
+    nx, ny, nz = sdffile.Magnetic_Field_bx_centred.dims
+    extents = sdffile.Grid_Grid.extents
+    dx = (extents[3] - extents[0])/(nx+1)
+    dy = (extents[4] - extents[1])/(ny+1)
+    dz = (extents[5] - extents[2])/(nz+1)
+
+    nx_new = x_max - x_min
+
+    origin = (extents[0] + 0.5*dx + x_min * dx,
+              extents[1] + 0.5*dy + x_min * dy,
+              extents[2])
+    
+    bx = np.array(sdffile.Magnetic_Field_bx_centred.data[x_min:x_max,x_min:x_max,:], order='F')
+    by = np.array(sdffile.Magnetic_Field_by_centred.data[x_min:x_max,x_min:x_max,:], order='F')
+    bz = np.array(sdffile.Magnetic_Field_bz_centred.data[x_min:x_max,x_min:x_max,:], order='F')
+    
+    jx = differentiate(bz, 'y', dy) - differentiate(by, 'z', dz)
+    jy = differentiate(bx, 'z', dz) - differentiate(bz, 'x', dx)
+    jz = differentiate(by, 'x', dx) - differentiate(bx, 'y', dy)
+    j_mag = np.zeros((nx_new, nx_new, nz))
+    j_mag[1:-1, 1:-1, 1:-1] = np.sqrt(np.power(jx,2) + np.power(jy,2) + np.power(jz,2))
+    
+    vx = np.array(sdffile.Velocity_Vx.data[x_min:x_max+1,x_min:x_max+1,:], order='F')
+    vy = np.array(sdffile.Velocity_Vy.data[x_min:x_max+1,x_min:x_max+1,:], order='F')
+    
+    v_mag = np.sqrt(np.power(vx, 2) + np.power(vy,2))
+    
+    imageToVTK(outfname, cellData = {
+        "Magnetic_Field/bx-centred" : bx,
+        "Magnetic_Field/by-centred" : by,
+        "Magnetic_Field/bz-centred" : bz,
+        "Magnetic_Field/j_mag": j_mag},
+               pointData = {
+                   "v_mag": v_mag
+               },
+              origin = origin, spacing = (dx, dy, dz))
+```
+
+```{python}
+run_folder = data_folder + "v-4r-4-isotropic/Data/"
+
+# timedumps = [0, 8, 30, 37]
+timedumps = [30]
+
+
+sdf_files = [
+    run_folder + '{0:04d}.sdf'.format(time_index)
+    for time_index in timedumps
+]
+
+output_fnames = [
+    run_folder + '{0:04d}_preprocessed'.format(time_index)
+    for time_index in timedumps
+]
+
+for sdffname, outfname in zip(sdf_files, output_fnames):
+    print(sdffname)
+    preprocess_magnetic_field(sdffname, outfname)
+```
+
+## Generate field for field line integration
+
+```{python}
+def preproccess_for_fli(sdfFilename, outfname,
+                        x_min=X_MIN, x_max=X_MAX,
+                       z_min=Z_MIN, z_max = Z_MAX):
+    sdffile = sdf.read(sdfFilename)
+
+    nx, ny, nz = sdffile.Magnetic_Field_bx_centred.dims
+    extents = sdffile.Grid_Grid.extents
+    dx = (extents[3] - extents[0])/(nx+1)
+    dy = (extents[4] - extents[1])/(ny+1)
+    dz = (extents[5] - extents[2])/(nz+1)
+
+    nx_new = x_max - x_min
+    nz_new = z_max - z_min
+
+    origin = (extents[0] + 0.5*dx + x_min * dx,
+              extents[1] + 0.5*dy + x_min * dy,
+              extents[2] + 0.5*dz + z_min * dz)
+    
+    bx = sdffile.Magnetic_Field_bx_centred.data[x_min:x_max,x_min:x_max,z_min:z_max]
+    by = sdffile.Magnetic_Field_by_centred.data[x_min:x_max,x_min:x_max,z_min:z_max]
+    bz = sdffile.Magnetic_Field_bz_centred.data[x_min:x_max,x_min:x_max,z_min:z_max]
+    
+    del sdffile
+    
+    jx = differentiate(bz, 'y', dy) - differentiate(by, 'z', dz)
+    jy = differentiate(bx, 'z', dz) - differentiate(bz, 'x', dx)
+    jz = differentiate(by, 'x', dx) - differentiate(bx, 'y', dy)
+    
+    mag_B = np.sqrt(bx**2 + by**2 + bz**2)
+    
+    j_dot_b = np.zeros((nx_new, nx_new, nz_new))
+    j_dot_b[1:-1, 1:-1, 1:-1] = (jx*bx[1:-1,1:-1,1:-1] 
+                                 + jy*by[1:-1,1:-1,1:-1] 
+                                 + jz*bz[1:-1,1:-1,1:-1])\
+    /mag_B[1:-1,1:-1,1:-1]
+    
+    del jx, jy, jz, mag_B
+    
+    np.save(outfname+"bx.npy", bx)
+    np.save(outfname+"by.npy", by)
+    np.save(outfname+"bz.npy", bz)
+    np.save(outfname+"j_dot_b.npy", j_dot_b)
+```
+
+```{python}
+run_folder = data_folder + "v-4r-4-isotropic/Data/"
+
+# timedumps = [0, 8, 30, 37]
+timedumps = range(0, 41)
+
+sdf_files = [
+    run_folder + '{0:04d}.sdf'.format(time_index)
+    for time_index in timedumps
+]
+
+output_fnames = [
+    run_folder + '{0:04d}_for_fli'.format(time_index)
+    for time_index in timedumps
+]
+
+for sdffname, outfname in zip(sdf_files, output_fnames):
+    print(sdffname)
+    preproccess_for_fli(sdffname, outfname,
+                       x_min=100, x_max=640-100,
+                       z_min=160, z_max = 640)
+```
+
+```{python}
+run_folder = data_folder + "v-4r-4-switching/Data/"
+
+# timedumps = [0, 8, 30, 37]
+timedumps = range(39, 41)
+
+sdf_files = [
+    run_folder + '{0:04d}.sdf'.format(time_index)
+    for time_index in timedumps
+]
+
+output_fnames = [
+    run_folder + '{0:04d}_for_fli'.format(time_index)
+    for time_index in timedumps
+]
+
+for sdffname, outfname in zip(sdf_files, output_fnames):
+    print(sdffname)
+    preproccess_for_fli(sdffname, outfname,
+                       x_min=100, x_max=640-100,
+                       z_min=160, z_max = 640)
+```

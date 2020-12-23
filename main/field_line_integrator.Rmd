@@ -1,0 +1,244 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.6.0
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python}
+import sys
+import time
+import os.path
+
+import numpy as np
+import scipy.interpolate
+import sdf
+import importlib
+import matplotlib
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+
+sys.path.insert(0,'../shared')
+
+from sdf_helper import *
+from plotting import latexify, save_plot
+
+import field_line_integrator
+importlib.reload(field_line_integrator)
+from field_line_integrator import *
+
+# %matplotlib inline
+# # %matplotlib widget
+
+INCLUDE_CBARS=True
+INCLUDE_TITLE=True
+INCLUDE_AXIS_LABELS=True
+
+data_folder = "/nas/1101974q/archie-latest-organisation-sept-2018/null-point-stressing/"
+parameter_study_folder = "/twisting-driver/parameter-study/"
+```
+
+```{python}
+sdfFilename = data_folder +\
+"/twisting-driver/high-resolution/v-4r-4-isotropic/Data/0033.sdf"
+
+sdffile = sdf.read(sdfFilename)
+field = load_magnetic_field(sdffile)
+```
+
+```{python}
+NUM_POINTS = int(1e4)
+
+N_ANGLES = 10
+RADIUS = 0.02
+
+# field = Field(sdfFilename)
+lines = [Line(RADIUS*np.cos(theta), RADIUS*np.sin(theta), 0.23, NUM_POINTS) for theta in np.linspace(0, 2.0*np.pi, N_ANGLES)]
+lines += [Line(RADIUS*np.cos(theta), RADIUS*np.sin(theta), -0.23, NUM_POINTS) for theta in np.linspace(0, 2.0*np.pi, N_ANGLES)]
+
+h = 1e-2
+
+for line in lines:
+    pos = line.get_pos()
+    while field.in_field(pos) and line.current<NUM_POINTS:
+        derivative = get_derivative(field, pos, h)
+        line.add_derivative(derivative)
+        pos = line.get_pos()
+```
+
+```{python}
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+for i, line in enumerate(lines[::-1]):
+    if i<len(lines)/2:
+        color = "red"
+    else:
+        color = "blue"
+    cmap = matplotlib.cm.get_cmap('viridis')
+    rgba = cmap(0.0)
+    line.plot(ax, color=color, linewidth=0.5)
+    
+ax.set_xlim(-0.5, 0.5)
+ax.set_ylim(-0.5, 0.5)
+ax.set_zlim(-0.1, 0.1)
+ax.set_axis_off()
+ax.elev = 10
+
+ax.azim = 90
+
+plt.show()
+```
+
+```{python}
+def plot_integration(data,
+               cbar=INCLUDE_CBARS,
+               include_title=INCLUDE_TITLE,
+               include_axis_labels=INCLUDE_AXIS_LABELS,
+               xlim=False, ylim=False, title=False,
+               extents=None, interpolation='none'):
+    
+    latexify(columns=1)
+    fig, axis = plt.subplots()
+        
+    im = axis.imshow(data.T,
+                interpolation=interpolation,
+                cmap=plt.get_cmap("viridis"),
+               extent=extents, origin='lower')
+
+    if include_title:
+        if title:
+            axis.title.set_text(" ".join(title.split("_")))
+    
+    if xlim:
+        axis.set_xlim(xlim)
+    if ylim:
+        axis.set_ylim(ylim)
+        
+    if include_axis_labels:
+        axis.set_xlabel("x")
+        axis.set_ylabel("y")
+        
+    if cbar:
+        divider = make_axes_locatable(axis)
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im, cax=cax)
+```
+
+```{python}
+def plot_polar_integration(theta, r, data,
+               include_title=INCLUDE_TITLE,
+               title=False):
+    
+    latexify(columns=1)
+    fig = plt.figure()
+    axis = fig.add_subplot(111, projection='polar')
+    
+    THETA, R = np.meshgrid(theta, r)
+    
+    print(THETA.shape)
+        
+    im = axis.pcolormesh(THETA, R, data.T,
+                shading='flat',
+                cmap=plt.get_cmap("viridis"))
+
+    if include_title:
+        if title:
+            axis.title.set_text(" ".join(title.split("_")))
+```
+
+# Timings
+
+```{python}
+run_folder = "v-3r-3-switching"
+folder = data_folder + parameter_study_folder + run_folder + "/Data/"
+i=10
+timedump = '{0:04d}'.format(i)
+sdfFilename = folder + timedump + ".sdf"
+
+mag_field = load_magnetic_field(sdfFilename)
+
+pef_data = calculate_parallel_electric_field(mag_field)
+pef_field = ScalarField(pef_data, mag_field.extents)
+```
+
+```{python active="", eval=FALSE}
+h = 1e-3
+seed = [0.07, 0.07, 0.23]
+integrator = Integrator(mag_field, pef_field, h)
+
+# %prun integrator.integrate(seed)
+
+truth = -7.516392139512586
+
+print(integrator.integrate(seed))
+print(abs((integrator.integrate(seed)-truth)/truth*100), "%")
+```
+
+```{python}
+result, _ = run_field_line_integrator(sdfFilename, 0.23, 0.5)
+```
+
+```{python}
+square_sides = 0.5
+extents = [-square_sides, square_sides,
+       -square_sides, square_sides]
+
+plot_integration(result,
+                 interpolation='bilinear',
+                 title=run_folder + "_" + timedump + "_z_" + str(0.23),
+                extents = extents)   
+    
+# plot_polar_integration(theta, r, results[0])
+    
+plt.show()
+```
+
+```{python}
+def plot_entire_parameter_study(z_level=0.23, square_sides=0.5):
+    visc_range = [3, 4, 5]
+    resist_range = [3, 4, 5]
+
+    for i in range(1, 16):
+        timedump = '{0:04d}'.format(i)
+        for visc in visc_range:
+            for resist in resist_range:
+                for model in ["isotropic", "switching"]:
+                    run_folder = "v-" + str(visc) + "r-" + str(resist) + "-" + model
+                    folder = data_folder + parameter_study_folder + run_folder + "/Data/"
+                    sdfFilename = folder + timedump + ".sdf"
+
+                    integration_result, n_values = run_field_line_integratorsdfFilename, z_level, square_sides)
+                    
+                    outname = run_folder + "_" + "integrated_pef" + "_" + timedump
+
+                    print(outname)
+#                     os.path.isfile('filename.txt')
+                    
+                    np.save(outname+".npy", integration_result)
+                    
+                    extents = [-square_sides, square_sides,
+                           -square_sides, square_sides]
+                    
+                    plot_integration(integration_result,
+                         interpolation='bilinear',
+                         title=outname,
+                         extents = extents)
+                    
+                    save_plot(outname + ".pdf")
+```
+
+```{python}
+plot_entire_parameter_study()
+```
+
+```{python}
+
+```

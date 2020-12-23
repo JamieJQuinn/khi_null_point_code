@@ -1,0 +1,1373 @@
+---
+jupyter:
+  jupytext:
+    text_representation:
+      extension: .Rmd
+      format_name: rmarkdown
+      format_version: '1.2'
+      jupytext_version: 1.6.0
+  kernelspec:
+    display_name: Python 3
+    language: python
+    name: python3
+---
+
+```{python}
+import numpy as np
+import sdf
+import sys
+import gc
+import importlib
+import time
+import math
+import matplotlib
+import matplotlib.pyplot as plt
+# %matplotlib inline
+
+sys.path.insert(0,'../shared')
+from energy import Energy
+
+import plotting
+importlib.reload(plotting)
+from plotting import *
+
+import sdf_helper
+importlib.reload(sdf_helper)
+from sdf_helper import *
+
+import fan_plane_integrator
+importlib.reload(fan_plane_integrator)
+from fan_plane_integrator import *
+
+import field_line_integrator
+importlib.reload(field_line_integrator)
+from field_line_integrator import *
+```
+
+# Settings
+
+```{python}
+data_folder = "/nas/1101974q/archie-latest-organisation-sept-2018/null-point-stressing/"
+parameter_study_folder = "/twisting-driver/parameter-study/"
+high_temporal_cadence_folder = "/twisting-driver/detailed-reconnection-runs/"
+high_resolution_folder = "/twisting-driver/high-resolution/"
+velocity_parameter_study_folder = "/twisting-driver/parameter-study-varying-twist-velocity/"
+
+outdir = "../../images/null_point_khi/"
+
+specific_run = "v-4r-4"
+iso_folder = data_folder + high_resolution_folder + specific_run + "-isotropic"
+swi_folder = data_folder + high_resolution_folder + specific_run + "-switching"
+
+DRAFT = True
+```
+
+# Useful functions
+
+```{python}
+def fetch_sdffile(time_index, visc, resist, containing_folder, visc_model):
+    sdfFilename = fetch_sdffilename(
+        time_index, visc, resist, containing_folder, visc_model)
+    return sdf.read(sdfFilename)
+
+def fetch_sdffilename(time_index, visc, resist, containing_folder, visc_model):
+    timedump = '{0:04d}'.format(int(time_index*2))
+    run_string = "v" + str(visc) + "r" + str(resist)
+    run_folder = run_string + "-" + visc_model
+    folder = containing_folder + run_folder + "/Data/"
+    sdfFilename = folder + timedump + ".sdf"
+    return sdfFilename
+
+def fetch_viscosity_pair_sdffilename(time_index, visc, resist, containing_folder):
+    iso_fname = fetch_sdffilename(
+        time_index, visc, resist, containing_folder, "isotropic")
+    swi_fname = fetch_sdffilename(
+        time_index, visc, resist, containing_folder, "switching")
+    return iso_fname, swi_fname
+
+def fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder):
+    iso_sdfFile = fetch_sdffile(
+        time_index, visc, resist, containing_folder, "isotropic")
+    swi_sdfFile = fetch_sdffile(
+        time_index, visc, resist, containing_folder, "switching")
+
+    return iso_sdfFile, swi_sdfFile
+
+def plot_side_by_side(axis, sdfFile, slices, cmaps, slice_dim='x'):
+    extents = get_slice_extents(sdfFile, slice_dim)
+    left = extents[:]
+    left[1] = 0.0
+    right = extents[:]
+    right[0] = 0.0
+    midpoint = length_to_index(sdfFile, 0.0, slice_dim)
+    
+    imgs = [axis.imshow(slices[0].T[:,:midpoint], extent=left, cmap=cmaps[0], origin='lower'),
+            axis.imshow(slices[1].T[:,midpoint:], extent=right, cmap=cmaps[1], origin='lower')]
+
+    axis.set_xlim(extents[0], extents[1])
+    axis.set_ylim(extents[2], extents[3])
+
+    return imgs
+
+def plot_quadrants(axis, sdfFile,
+                   slices, cmaps):
+    extents = get_slice_extents(sdfFile, "z")
+    top_right = extents[:]
+    top_right[0] = 0.0
+    top_right[2] = 0.0
+    bottom_right = extents[:]
+    bottom_right[0] = 0.0
+    bottom_right[3] = 0.0
+    top_left = extents[:]
+    top_left[1] = 0.0
+    top_left[2] = 0.0
+    bottom_left = extents[:]
+    bottom_left[1] = 0.0
+    bottom_left[3] = 0.0
+    midpoint = length_to_index(sdfFile, 0.0, "x")
+    
+    imgs = [
+        axis.imshow(slices[0][:midpoint,:midpoint], extent=top_left, cmap=cmaps[0]),
+        axis.imshow(slices[1][:midpoint,midpoint:], extent=top_right, cmap=cmaps[1]),
+        axis.imshow(slices[2][midpoint:,:midpoint], extent=bottom_left, cmap=cmaps[2]),
+        axis.imshow(slices[3][midpoint:,midpoint:], extent=bottom_right, cmap=cmaps[3])
+    ]
+
+    axis.set_xlim(extents[0], extents[1])
+    axis.set_ylim(extents[2], extents[3])
+    
+    return imgs
+
+def fetch_vorticity_and_current(time_index, visc, resist, containing_folder):
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder)
+    vorticity_iso = get_variable_slice(iso_sdf, "magnitude_vorticity_density", "z", 0.0)
+    del iso_sdf
+    
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder)
+    current_iso = get_variable_slice(iso_sdf, "magnitude_current_density", "z", 0.0)
+    del iso_sdf
+    
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder)
+    vorticity_swi = get_variable_slice(swi_sdf, "magnitude_vorticity_density", "z", 0.0)
+    del swi_sdf
+    
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder)
+    current_swi = get_variable_slice(swi_sdf, "magnitude_current_density", "z", 0.0)
+    del swi_sdf
+    
+    return [vorticity_iso, vorticity_swi, current_iso, current_swi]
+
+def plot_vorticity_and_current(axis, time_index, visc, resist, containing_folder, slices,
+                               max_vorticity=None, max_current=None,
+                               slice_multipliers=[1.0,1.0,1.0,1.0]):
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(time_index, visc, resist, containing_folder)
+    
+    for i, mult in enumerate(slice_multipliers):
+        slices[i] *= mult
+    
+    cmaps = ['Blues', 'Blues',
+             'Reds', 'Reds']
+
+    imgs = plot_quadrants(axis, iso_sdf, slices, cmaps)
+    
+    vorticity_iso, vorticity_swi, current_iso, current_swi = slices
+    
+    if max_vorticity == None:
+        max_vorticity = math.ceil(max(
+            np.max(vorticity_iso), np.max(vorticity_swi)
+        ))
+    
+    if max_current == None:
+        max_current = math.ceil(max(
+            np.max(current_iso), np.max(current_swi)
+        ))
+    
+    print("max vorticity:", max_vorticity)
+    print("max current:", max_current)
+    
+    imgs[0].set_clim(vmin=0, vmax=max_vorticity)
+    imgs[1].set_clim(vmin=0, vmax=max_vorticity)
+    imgs[2].set_clim(vmin=0, vmax=max_current)
+    imgs[3].set_clim(vmin=0, vmax=max_current)    
+    
+    return imgs
+
+def plot_integration(data,
+               cbar=INCLUDE_CBARS,
+               include_title=INCLUDE_TITLE,
+               include_axis_labels=INCLUDE_AXIS_LABELS,
+               xlim=False, ylim=False, title=False,
+               extents=None, interpolation='none'):
+    
+    latexify(columns=2)
+    fig, axis = plt.subplots()
+        
+    im = axis.imshow(data.T,
+                interpolation=interpolation,
+                cmap=plt.get_cmap("viridis"),
+               extent=extents, origin='lower')
+
+    if include_title:
+        if title:
+            axis.title.set_text(" ".join(title.split("_")))
+    
+    if xlim:
+        axis.set_xlim(xlim)
+    if ylim:
+        axis.set_ylim(ylim)
+        
+    if include_axis_labels:
+        axis.set_xlabel("x")
+        axis.set_ylabel("y")
+        
+    if cbar:
+        divider = make_axes_locatable(axis)
+        cax = divider.append_axes("right", size="5%", pad=0.05)
+        plt.colorbar(im, cax=cax)
+
+def calc_reconnection_rate(folder, timedump, extents, h=None):
+    file_basename = folder + "/" + timedump + "_for_fli"
+    bx = np.load(file_basename + "bx.npy")
+    by = np.load(file_basename + "by.npy")
+    bz = np.load(file_basename + "bz.npy")
+    j_dot_b = np.load(file_basename + "j_dot_b.npy")
+    
+    mag_field = VectorField(bx, by, bz, extents)
+    pef_field = ScalarField(j_dot_b, extents)
+    
+    result, _ = run_field_line_integrator(mag_field, pef_field, z_level, side_length, h=h)
+
+    return result
+```
+
+# Kinetic Energy
+
+```{python}
+iso_energy_filename = iso_folder + "/Data/en.dat"
+swi_energy_filename = swi_folder + "/Data/en.dat"
+energy_iso = Energy(iso_energy_filename)
+energy_swi = Energy(swi_energy_filename)
+
+_fig, axis = create_axes(3)
+
+axis.plot(energy_iso.data[:,0], energy_iso.data[:,2], linewidth=1, label='iso')
+axis.plot(energy_swi.data[:,0], energy_swi.data[:,2], '--', linewidth=1, label='swi')
+
+axis.set_ylim(0.0, 0.008)
+axis.set_xlim(0, 20)
+axis.set_xlabel(r"$t$")
+axis.set_ylabel(r"$KE$")
+axis.legend(frameon=False)
+
+save_plot(outdir + "v-4r-4_kinetic_energy.pdf")
+```
+
+## Ohmic heating
+
+```{python}
+def fix_ohmic(heating, shift=10):
+    restart_point = np.argmin(heating[shift:]) + shift
+    heating[restart_point:] += heating[restart_point-1]
+```
+
+```{python}
+iso_energy_filename = iso_folder + "/Data/en.dat"
+swi_energy_filename = swi_folder + "/Data/en.dat"
+energy_iso = Energy(iso_energy_filename)
+energy_swi = Energy(swi_energy_filename)
+
+_fig, axis = create_axes(3)
+
+time = energy_iso.data[:,0]
+heating = energy_iso.data[:,5]
+fix_ohmic(heating, 100000)
+fix_ohmic(heating)
+
+axis.plot(time, heating, linewidth=1)
+
+time = energy_swi.data[:,0]
+heating = energy_swi.data[:,5]
+fix_ohmic(heating, 100000)
+fix_ohmic(heating)
+
+axis.plot(time, heating, '--', linewidth=1)
+
+axis.set_ylim(0.0, 0.3)
+axis.set_xlim(0, 20)
+axis.set_xlabel(r"$t$")
+axis.set_ylabel(r"$Q_{\eta}$")
+
+save_plot(outdir + "v-4r-4_ohmic_heating.pdf")
+```
+
+```{python}
+iso_energy_filename = iso_folder + "/Data/en.dat"
+swi_energy_filename = swi_folder + "/Data/en.dat"
+energy_iso = Energy(iso_energy_filename)
+energy_swi = Energy(swi_energy_filename)
+
+_fig, axis = create_axes(3)
+
+time = energy_iso.data[:,0]
+heating = energy_iso.data[:,4]
+
+axis.plot(time, heating, linewidth=1)
+
+time = energy_swi.data[:,0]
+heating = energy_swi.data[:,4]
+
+
+axis.plot(time, heating, '--', linewidth=1)
+
+axis.set_ylim(0.0, 0.015)
+axis.set_xlim(0, 20)
+axis.set_xlabel(r"$t$")
+axis.set_ylabel(r"$Q_{\nu}$")
+
+save_plot(outdir + "v-4r-4_viscous_heating.pdf")
+```
+
+```{python}
+iso_energy_filename = iso_folder + "/Data/en.dat"
+swi_energy_filename = swi_folder + "/Data/en.dat"
+energy_iso = Energy(iso_energy_filename)
+energy_swi = Energy(swi_energy_filename)
+
+_fig, axis = create_axes(3)
+
+time = energy_iso.data[:,0]
+heating = energy_iso.data[:,3]
+
+axis.plot(time, heating, linewidth=1)
+
+time = energy_swi.data[:,0]
+heating = energy_swi.data[:,3]
+
+
+axis.plot(time, heating, '--', linewidth=1)
+
+# axis.set_ylim(0.0, 0.015)
+axis.set_xlim(0, 20)
+axis.set_xlabel(r"$t$")
+axis.set_ylabel(r"$\varepsilon$")
+
+save_plot(outdir + "v-4r-4_internal_energy.pdf")
+```
+
+```{python}
+iso_energy_filename = iso_folder + "/Data/en.dat"
+swi_energy_filename = swi_folder + "/Data/en.dat"
+energy_iso = Energy(iso_energy_filename)
+energy_swi = Energy(swi_energy_filename)
+
+_fig, axis = create_axes(3)
+
+time = energy_iso.data[:,0]
+heating = energy_iso.data[:,1]
+
+axis.plot(time, heating, linewidth=1)
+
+time = energy_swi.data[:,0]
+heating = energy_swi.data[:,1]
+
+axis.plot(time, heating, '--', linewidth=1)
+
+# axis.set_ylim(0.0, 0.015)
+axis.set_xlim(0, 20)
+axis.set_xlabel(r"$t$")
+axis.set_ylabel(r"$ME$")
+
+save_plot(outdir + "v-4r-4_magnetic_energy.pdf")
+```
+
+# Vorticity/current density rings
+
+```{python}
+slices_3 = fetch_vorticity_and_current(
+    3, -4, -4, data_folder + high_resolution_folder)
+```
+
+```{python}
+fig, axis = create_axes(2, square=True)
+
+imgs = plot_vorticity_and_current(
+    axis, 3, -4, -4, data_folder + high_resolution_folder,\
+    slices_3, slice_multipliers = [1.0, 1.0, 1.0, 1.0]
+)
+
+boundaries = 3.0
+# remove_spines(axis, 'right')
+axis.spines['bottom'].set_visible(False)
+axis.spines['left'].set_visible(False)
+axis.set_ylim(-boundaries, boundaries)
+axis.set_xlim(-boundaries, boundaries)
+axis.set_xlabel(r"$x$")
+axis.set_ylabel(r"$y$")
+
+if DRAFT:
+    axis.text(-0.95*boundaries, 0.95*boundaries, r"Iso $|\omega|$",
+              verticalalignment='top'
+             )
+    axis.text(0.95*boundaries, 0.95*boundaries, r"Swi $|\omega|$", 
+              horizontalalignment='right',
+              verticalalignment='top',
+)
+    axis.text(-0.95*boundaries, -0.95*boundaries, r"Iso $|j|$",
+              verticalalignment='bottom'
+             )
+    axis.text(0.95*boundaries, -0.95*boundaries, r"Swi $|j|$", 
+              horizontalalignment='right',
+              verticalalignment='bottom',
+)
+
+if DRAFT:
+    bbox_ax = axis.get_position()
+#     print(bbox_ax)
+    bar_heights = 0.95*(bbox_ax.y1 - bbox_ax.y0)/2
+    cax1 = cbar_im1a_ax = fig.add_axes(
+        [0.91, bbox_ax.y0 + 1.05*(bbox_ax.y1 - bbox_ax.y0)/2, 0.02, bar_heights])
+    plt.colorbar(imgs[0], cax=cax1)
+    cax2 = cbar_im1a_ax = fig.add_axes(
+        [0.91, bbox_ax.y0, 0.02, bar_heights])
+    plt.colorbar(imgs[2], cax=cax2)
+
+save_plot(outdir + "v-4r-4_vorticity_current_ring_t_3.pdf")
+```
+
+```{python}
+slices = fetch_vorticity_and_current(
+    10, -4, -4, data_folder + high_resolution_folder)
+```
+
+```{python}
+fig, axis = create_axes(2, square=True)
+
+imgs = plot_vorticity_and_current(
+    axis, 9, -4, -4, data_folder + high_resolution_folder,\
+    slices, slice_multipliers = [1.0, 1.0, 1.0, 1.0]
+)
+
+max_vorticity = 100
+max_current = 50
+
+imgs[0].set_clim(vmin=0, vmax=max_vorticity)
+imgs[1].set_clim(vmin=0, vmax=max_vorticity)
+imgs[2].set_clim(vmin=0, vmax=max_current)
+imgs[3].set_clim(vmin=0, vmax=max_current)   
+
+boundaries = 3.0
+# remove_spines(axis, 'right')
+axis.spines['bottom'].set_visible(False)
+axis.spines['left'].set_visible(False)
+axis.set_ylim(-boundaries, boundaries)
+axis.set_xlim(-boundaries, boundaries)
+axis.set_xlabel(r"$x$")
+axis.set_ylabel(r"$y$")
+
+if DRAFT:
+    axis.text(-0.95*boundaries, 0.95*boundaries, r"Iso $|\omega|$",
+              verticalalignment='top'
+             )
+    axis.text(0.95*boundaries, 0.95*boundaries, r"Swi $|\omega|$", 
+              horizontalalignment='right',
+              verticalalignment='top',
+)
+    axis.text(-0.95*boundaries, -0.95*boundaries, r"Iso $|j|$",
+              verticalalignment='bottom'
+             )
+    axis.text(0.95*boundaries, -0.95*boundaries, r"Swi $|j|$", 
+              horizontalalignment='right',
+              verticalalignment='bottom',
+)
+
+if DRAFT:
+    bbox_ax = axis.get_position()
+#     print(bbox_ax)
+    bar_heights = 0.95*(bbox_ax.y1 - bbox_ax.y0)/2
+    cax1 = cbar_im1a_ax = fig.add_axes(
+        [0.91, bbox_ax.y0 + 1.05*(bbox_ax.y1 - bbox_ax.y0)/2, 0.02, bar_heights])
+    plt.colorbar(imgs[0], cax=cax1)
+    cax2 = cbar_im1a_ax = fig.add_axes(
+        [0.91, bbox_ax.y0, 0.02, bar_heights])
+    plt.colorbar(imgs[2], cax=cax2)
+
+# plt.show()
+save_plot(outdir + "v-4r-4_vorticity_current_ring_t_10.pdf")
+```
+
+# Velocity out of the plane
+
+```{python}
+iso_vel = {}
+swi_vel = {}
+
+for i, t in enumerate([2, 4, 6, 8, 10, 12]):
+    print(t)
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+    iso_vel[t] = get_slice(iso_sdf, "Velocity_Vz", "z", 0.0)
+    swi_vel[t] = get_slice(swi_sdf, "Velocity_Vz", "z", 0.0)
+    del iso_sdf, swi_sdf
+```
+
+```{python}
+maxes = [5e-6, 5e-5, 1e-4, 5e-2, 5e-2, 5e-2]
+multipliers = [1, 1, 5, 1000, 1000, 1000]
+
+# for t in [2, 4, 6, 8, 10, 12]:
+for i, t in enumerate([2, 4, 6, 8, 10, 12]):
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+
+    _fig, axis = create_axes(2, square=True)
+
+    multiplier = multipliers[i]
+    imgs = plot_side_by_side(axis, iso_sdf, 
+                             [multiplier*iso_vel[t], swi_vel[t]], 
+                             ['coolwarm', 'coolwarm'], 
+                             slice_dim='z')
+
+    boundaries = 2.0
+    axis.set_xlim(-boundaries, boundaries)
+    axis.set_ylim(-boundaries, boundaries)
+    axis.plot([0,0], [boundaries, -boundaries], 
+              '--', color='grey', linewidth=0.5)
+
+#     max_vel = max(
+#         np.max(iso_vel), np.max(swi_vel)
+#     )
+    max_vel = maxes[i]
+
+    # print("max velocity:", max_vel)
+
+    imgs[0].set_clim(vmin=-max_vel, vmax=max_vel)
+    imgs[1].set_clim(vmin=-max_vel, vmax=max_vel)
+
+    axis.text(-0.95*boundaries, 0.9*boundaries, r"isotropic")
+    axis.text(-0.95*boundaries, 0.79*boundaries, 
+              r"$\times" + str(multiplier) + "$")
+    axis.text(0.95*boundaries, 0.9*boundaries, r"switching", ha='right')
+
+#     if DRAFT:
+    cbar = attach_colorbar(axis, imgs[0])
+    
+    cbar.formatter.set_powerlimits((0, 0))
+    cbar.update_ticks()
+
+    save_plot(outdir + "v-4r-4_uz_t_"+str(t)+".pdf")
+```
+
+# Mach numbers
+
+```{python}
+def plot_mach_numbers(axes, sdfFile, linestyle, label,
+                     r_min, r_max, z_min, z_max):
+    fast_mach, _alfven_mach, delta1 = \
+        calc_mach_numbers(sdfFile, r_min, r_max, z_min, z_max)
+    r = np.linspace(r_min, r_max, num=fast_mach.size)
+    axes[0].plot(r, fast_mach, linestyle, label=label, linewidth=1)
+#     axes[1].plot(r, alfven_mach, linestyle)
+    axes[1].plot(r, delta1, linestyle, linewidth=1)
+    axes[1].plot((0, r_max), (1,1), '--', color='grey', linewidth=0.5)
+```
+
+```{python}
+r_min = 0.2
+r_max = 1.5
+z_min = -0.1
+z_max = 0.1
+
+for t in [6]:
+    _fig, axes = create_axes(2, subplots_rows=2, sharex=True)
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(
+        t, -4, -4, data_folder + high_resolution_folder)
+
+    plot_mach_numbers(axes, iso_sdf, 'C0-', 'iso',\
+                 r_min, r_max, z_min, z_max)
+    del iso_sdf
+    plot_mach_numbers(axes, swi_sdf, 'C1--', 'swi',\
+                 r_min, r_max, z_min, z_max)
+    del swi_sdf
+
+    for axis in axes:
+        axis.set_xlim(0.0, r_max)
+
+    axes[0].legend(frameon=False)
+    axes[0].set_ylabel(r"$M_f$")
+    axes[0].set_ylim(0, 0.5)
+    # axes[2].set_title(r"$M_A$")
+    axes[1].set_ylabel(r"$\Lambda$")
+    axes[1].set_xlabel(r"$r$")
+    axes[1].set_ylim(0, 3)
+
+    # _fig.legend()
+#     plt.show()
+    save_plot(outdir + "v-4r-4_mach_t_"+str(t)+".pdf")
+```
+
+# Counterflows
+
+```{python}
+for t in [3]:
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+    iso_vel = get_slice(iso_sdf, "Velocity_Vx", "x", 0.0)
+    swi_vel = get_slice(swi_sdf, "Velocity_Vx", "x", 0.0)
+
+    _fig, axis = create_axes(2)
+
+    imgs = plot_side_by_side(axis, iso_sdf, [iso_vel, swi_vel], ['seismic', 'seismic'])
+
+    axis.plot([0,0],[0.25, -0.25], '--', color='grey', linewidth=0.5)
+
+
+    max_vel = max(
+        np.max(iso_vel), np.max(swi_vel)
+    )
+
+    print("max velocity:", max_vel)
+
+    imgs[0].set_clim(vmin=-max_vel, vmax=max_vel)
+    imgs[1].set_clim(vmin=-max_vel, vmax=max_vel)
+
+    axis.text(-0.95, 0.18, r"isotropic")
+    axis.text(0.95, 0.18, r"switching", ha='right')
+
+    if DRAFT:
+        attach_colorbar(axis, imgs[0])
+
+    axis.set_xlim(-1.0, 1.0)
+    # plt.show()
+    save_plot(outdir + "v-4r-4_counterflows_t_"+str(t)+".pdf")
+```
+
+```{python}
+for t in [3]:
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+    iso_velp = get_variable_slice(iso_sdf, "lorentz_force_x", "x", 0.0)
+    iso_velm = get_variable_slice(iso_sdf, "lorentz_force_x", "x", 0.0-0.01)
+    iso_vel = (iso_velp + iso_velm)/2.0
+
+    swi_velp = get_variable_slice(swi_sdf, "lorentz_force_x", "x", 0.0)
+    swi_velm = get_variable_slice(swi_sdf, "lorentz_force_x", "x", 0.0-0.01)
+    swi_vel = (swi_velp + swi_velm)/2.0
+
+    _fig, axis = create_axes(2)
+
+    imgs = plot_side_by_side(axis, iso_sdf, [iso_vel, swi_vel], ['seismic', 'seismic'])
+
+    axis.plot([0,0],[0.25, -0.25], '--', color='grey', linewidth=0.5)
+
+
+    max_vel = max(
+        np.max(iso_vel), np.max(swi_vel)
+    )
+
+    print("max velocity:", max_vel)
+
+    imgs[0].set_clim(vmin=-max_vel, vmax=max_vel)
+    imgs[1].set_clim(vmin=-max_vel, vmax=max_vel)
+
+    axis.text(-0.95, 0.18, r"isotropic")
+    axis.text(0.95, 0.18, r"switching", ha='right')
+
+    if DRAFT:
+        attach_colorbar(axis, imgs[0])
+
+    axis.set_xlim(-1.0, 1.0)
+    # plt.show()
+    save_plot(outdir + "v-4r-4_lorentz_counterflows_t_"+str(t)+".pdf")
+```
+
+# Reconnection rate
+
+```{python}
+side_length = 0.1
+z_level = 0.23
+```
+
+```{python active="", eval=FALSE}
+hr_iso_rate = [0]
+
+nu = -4
+eta = -4
+
+for t in range(1, 37):
+    print(t)
+    iso_sdf = fetch_sdffile(t, nu, eta, data_folder + high_resolution_folder, "isotropic")
+    reconn_rate = calc_reconnection_rate(iso_sdf)
+    plt.imshow(reconn_rate)
+    plt.show()
+    hr_iso_rate += [np.max(np.abs(reconn_rate))]
+
+```
+
+```{python}
+iso_rate_dic = {}
+swi_rate_dic = {}
+```
+
+```{python}
+for t in np.arange(0, 20.5, 0.5):
+# for t in np.arange(18, 20.5, 0.5):
+    if t > 17:
+        side_length = 0.2
+        h = 0.05
+    else:
+        side_length = 0.1
+        h = 0.01
+    print(t)
+    iso_sdf = fetch_sdffile(
+        t, -4, -4, data_folder + high_resolution_folder, "isotropic")
+    extents = iso_sdf.Grid_Grid.extents
+    timedump = '{0:04d}'.format(int(t*2))
+    
+    start = time.time()
+    
+    fli_data_folder = data_folder + high_resolution_folder \
+    + "/v-4r-4-isotropic/Data/"
+    iso_rate_dic[t] = calc_reconnection_rate(fli_data_folder, timedump, extents)
+    
+    elapsed_time = time.time() - start
+    
+    print("Elapsed time (hr):", elapsed_time/3600)
+    print("Time remaining (hr):", elapsed_time*((41-2*t))/3600)
+```
+
+```{python}
+for t in np.arange(17, 20.5, 0.5):
+    if t > 17:
+        side_length = 0.3
+        h = 0.02
+    elif t > 14:
+        side_length = 0.2
+        h = 0.02
+    else:
+        side_length = 0.1
+        h = 0.01
+    print(t)
+    iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+    extents = iso_sdf.Grid_Grid.extents
+    timedump = '{0:04d}'.format(int(t*2))
+    fli_data_folder = data_folder + high_resolution_folder \
+    + "/v-4r-4-switching/Data/"
+    swi_rate_dic[t] = calc_reconnection_rate(
+        fli_data_folder, timedump, extents, h=h)
+```
+
+```{python}
+# print(iso_rate, swi_rate)
+
+# iso_rate = iso_rate[1:]
+# swi_rate = swi_rate[1:]
+
+for i in iso_rate_dic:
+    print(i)
+    plt.imshow(np.abs(iso_rate_dic[i]))
+    plt.show()
+    
+    plt.imshow(np.abs(swi_rate_dic[i]))
+    plt.show()
+```
+
+```{python}
+fig, axis = create_axes(3)
+t = np.arange(0, 20.5, 0.5)
+iso_max_rate = [np.max(np.abs(iso_rate_dic[ta])) for ta in t]
+axis.plot(t, iso_max_rate)
+t = np.arange(0, 20.5, 0.5)
+swi_max_rate = [np.max(np.abs(swi_rate_dic[ta])) for ta in t]
+axis.plot(t, swi_max_rate, '--')
+axis.set_xlim(0, 20)
+axis.set_ylim(0, 25)
+axis.set_xlabel(r"$t$")
+axis.set_ylabel(r"max $\Phi$")
+# plt.show()
+save_plot(outdir + "v-4r-4_reconn_rate_over_time.pdf")
+```
+
+```{python}
+t=10
+side_length = 0.5
+z_level = 0.23
+
+iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+extents = iso_sdf.Grid_Grid.extents
+timedump = '{0:04d}'.format(t*2)
+
+fli_data_folder = data_folder + high_resolution_folder \
++ "/v-4r-4-isotropic/Data/"
+iso_reconn_rate = calc_reconnection_rate(
+    fli_data_folder, timedump, extents, h=0.01)
+
+fli_data_folder = data_folder + high_resolution_folder \
++ "/v-4r-4-switching/Data/"
+swi_reconn_rate = calc_reconnection_rate(
+    fli_data_folder, timedump, extents, h=0.01)
+```
+
+```{python}
+extents = [-side_length, side_length,
+           -side_length, side_length]
+
+# plt.imshow(iso_reconn_rate)
+# plt.show()
+# plt.imshow(swi_reconn_rate)
+# plt.show()
+
+_fig, axis = create_axes(2, square=True)
+
+# extents = get_slice_extents(sdfFile, slice_dim)
+left = extents[:]
+left[1] = 0.0
+right = extents[:]
+right[0] = 0.0
+midpoint = int(iso_reconn_rate.shape[1]/2)
+
+imgs = [axis.imshow(np.abs(iso_reconn_rate).T[:,:midpoint], extent=left, cmap='viridis', origin='lower'),
+        axis.imshow(np.abs(swi_reconn_rate).T[:,midpoint:], extent=right, cmap='viridis', origin='lower')]
+
+axis.set_xlim(extents[0], extents[1])
+axis.set_ylim(extents[2], extents[3])
+
+# imgs = plot_side_by_side(axis, iso_sdf, [iso_reconn_rate, swi_reconn_rate], ['viridis', 'viridis'], slice_dim='z')
+
+boundaries = 0.5
+# axis.set_xlim(-boundaries, boundaries)
+# axis.set_ylim(-boundaries, boundaries)
+axis.plot([0,0],[boundaries, -boundaries], '--', color='grey', linewidth=0.5)
+
+max_rate = max(
+    np.max(np.abs(iso_reconn_rate)), np.max(np.abs(swi_reconn_rate))
+)
+min_rate = min(
+    np.min(np.abs(iso_reconn_rate)), np.min(np.abs(swi_reconn_rate))
+)
+# min_rate = 0
+
+imgs[0].set_clim(vmin=min_rate, vmax=max_rate)
+imgs[1].set_clim(vmin=min_rate, vmax=max_rate)
+
+axis.text(-0.95*boundaries, 0.9*boundaries, r"isotropic")
+axis.text(0.95*boundaries, 0.9*boundaries, r"switching", ha='right')
+
+attach_colorbar(axis, imgs[0])
+
+# plot_integration(swi_reconn_rate,
+#                  interpolation='bilinear',
+# #                  title=run_folder + "_" + timedump + "_z_" + str(z_level),
+#                  extents = extents)   
+
+save_plot(outdir + "v-4r-4_reconn_rate_t_10.pdf")
+# plt.show()
+```
+
+```{python}
+t=20
+side_length = 0.5
+z_level = 0.23
+
+iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
+extents = iso_sdf.Grid_Grid.extents
+timedump = '{0:04d}'.format(int(t*2))
+
+fli_data_folder = data_folder + high_resolution_folder \
++ "/v-4r-4-isotropic/Data/"
+iso_reconn_rate = calc_reconnection_rate(
+    fli_data_folder, timedump, extents, h=0.01)
+
+fli_data_folder = data_folder + high_resolution_folder \
++ "/v-4r-4-switching/Data/"
+swi_reconn_rate = calc_reconnection_rate(
+    fli_data_folder, timedump, extents, h=0.01)
+```
+
+```{python}
+extents = [-side_length, side_length,
+           -side_length, side_length]
+
+label = ['iso', 'swi']
+
+for i, rate in enumerate([iso_reconn_rate, swi_reconn_rate]):
+    _fig, axis = create_axes(2, square=True)
+    
+    img = axis.imshow(np.abs(rate).T, extent=extents, cmap='viridis', origin='lower')
+
+    axis.set_xlim(extents[0], extents[1])
+    axis.set_ylim(extents[2], extents[3])
+
+    max_rate = max(
+        np.max(np.abs(iso_reconn_rate)), np.max(np.abs(swi_reconn_rate))
+    )
+    min_rate = min(
+        np.min(np.abs(iso_reconn_rate)), np.min(np.abs(swi_reconn_rate))
+    )
+    min_rate = 0
+
+    img.set_clim(vmin=min_rate, vmax=max_rate) 
+
+    save_plot(outdir + "v-4r-4_reconn_rate_t_+"+str(t)+label[i]+".pdf")
+    plt.show()
+```
+
+# Shear layer thicknesses
+
+```{python}
+# Settings
+
+r_min = 0.4
+r_max = 2.0
+z_min = -0.25
+z_max = 0.25
+```
+
+```{python}
+def calc_ring_properties(sdfFilename, ring_var, 
+                         check_slices=False, fix_peak=None):
+    if ring_var == "vorticity":
+        ring_variable = "magnitude_vorticity_density"
+        shear_variable = "Velocity_Vx"
+    elif ring_var == "current":
+        ring_variable = "magnitude_current_density"
+        shear_variable = "Magnetic_Field_Bx"
+    
+    extents = [r_min, r_max, z_min, z_max]
+    
+    sdfFile = sdf.read(sdfFilename)
+
+    # create slice indices
+    r_min_idx = length_to_index(sdfFile, r_min, "x")
+    r_max_idx = length_to_index(sdfFile, r_max, "x")
+    mid_point = length_to_index(sdfFile, 0.0, "z")
+
+    # Slice variable
+    var_slice = get_variable_slice(sdfFile, ring_variable, "x", 0.0).T
+    var_slice = var_slice[:,r_min_idx:r_max_idx]
+    
+    del sdfFile
+    sdfFile = sdf.read(sdfFilename)
+
+    # Find peak in radial direction
+    z_slice = var_slice[mid_point]
+    if fix_peak:
+        r_peak_loc = length_to_index(sdfFile, fix_peak, "x") - r_min_idx
+    else:
+        r_peak_loc = np.argmax(z_slice)
+    real_peak_loc = index_to_length(sdfFile, r_peak_loc+r_min_idx, "x")
+#     radial_extent = index_to_length(sdfFile, peak_widths(z_slice, [r_peak_loc], 1.0/3.0)[0][0], "x", relative=True)
+    peak_magnitude = z_slice[r_peak_loc]
+
+    # Plot radial direction
+    # fig, axis = create_axes(1)
+    # axis.plot(z_slice)
+    # axis.plot(r_peak_loc, z_slice[r_peak_loc], 'x')
+    # plt.show()
+
+    # Find peak in z direction
+    # r_slice = var_slice[:, r_peak_loc]
+    # z_peak_loc = np.argmax(r_slice)
+    z_peak_loc = 0.0
+
+    # fig, axis = create_axes(1)
+    # axis.plot(r_slice)
+    # axis.plot(z_peak_loc, r_slice[z_peak_loc], 'x')
+    # plt.show()
+
+    # Plot slice
+    if check_slices:
+        fig, axis = create_axes(1)
+        im = axis.imshow(var_slice, cmap="coolwarm", extent=extents,
+                         origin='lower', interpolation='bilinear')
+        attach_colorbar(axis, im)
+        # axis.set_xlim((-xlim, xlim))
+        # axis.set_ylim((-ylim, ylim))
+        axis.plot(real_peak_loc, 0.0, 'x')
+        plt.show()
+
+    # Slice velocity
+    var_slice = get_variable_slice(sdfFile, shear_variable, "x", 0.0).T
+    var_slice = var_slice[:,r_min_idx:r_max_idx]
+    
+    del sdfFile
+    sdfFile = sdf.read(sdfFilename)
+
+#     fig, axis = create_axes(1)
+#     im = axis.imshow(var_slice, cmap="coolwarm", extent=extents,
+#                      origin='lower', interpolation='bilinear')
+#     attach_colorbar(axis, im)
+#     # axis.set_xlim((-xlim, xlim))
+#     # axis.set_ylim((-ylim, ylim))
+#     axis.plot(real_peak_loc, 0.0, 'x')
+#     plt.show()
+
+    # Find peak in z direction
+    r_slice = var_slice[:, r_peak_loc]
+    z_peak_loc = np.argmax(r_slice)
+    z_trough_loc = np.argmin(r_slice)
+    # layer_thickness = abs(z_peak_loc - z_trough_loc)
+    layer_thickness = index_to_length(sdfFile, abs(z_peak_loc - z_trough_loc), "z", relative=True)
+
+    shear_magnitude = abs(r_slice[z_peak_loc] - r_slice[z_trough_loc])
+
+    if check_slices:
+        fig, axis = create_axes(1)
+        axis.plot(r_slice)
+        axis.plot(z_peak_loc, r_slice[z_peak_loc], 'x')
+        axis.plot(z_trough_loc, r_slice[z_trough_loc], 'x')
+        plt.show()
+      
+    # Actually calculate peak location
+    r_peak_loc = np.argmax(z_slice)
+    real_peak_loc = index_to_length(sdfFile, r_peak_loc+r_min_idx, "x")
+    
+    if check_slices:
+        print("Peak location:", real_peak_loc)
+    #     print("Radial extent:", radial_extent)
+        print("Layer thickness:", layer_thickness)
+        print("Peak magnitude:", peak_magnitude)
+        print("Shear magnitude:", shear_magnitude)
+    
+    return real_peak_loc, layer_thickness, peak_magnitude, shear_magnitude
+```
+
+```{python}
+nu = -4
+eta = -4
+
+peak_locs = {}
+layer_thicknesses = {}
+peak_mags = {}
+shear_mags = {}
+
+for layer in ['vorticity', 'current']:
+    for model in ['isotropic', 'switching']:
+        line_name = model + layer
+                    
+        peak_locs[line_name] = []
+        layer_thicknesses[line_name] = []           
+        peak_mags[line_name] = [] 
+        shear_mags[line_name] = []
+
+times = np.arange(2, 6, 0.5)
+        
+for t in times:
+    for layer in ['vorticity', 'current']:
+        iso_sdf, swi_sdf = fetch_viscosity_pair_sdffilename(t, nu, eta, data_folder + high_resolution_folder)
+        for model in ['isotropic', 'switching']:
+            print(t, model, layer)
+            line_name = model + layer
+
+            if model == 'isotropic':
+                sdfFile = iso_sdf
+            else:
+                sdfFile = swi_sdf
+
+            # Calculate ring properties
+            peak_loc, layer_thickness, peak_mag, shear_mag = \
+                calc_ring_properties(sdfFile, layer,
+                                     check_slices=False, fix_peak=0.7)
+            del sdfFile
+            peak_locs[line_name] += [peak_loc]
+            layer_thicknesses[line_name] += [layer_thickness]            
+            peak_mags[line_name] += [peak_mag] 
+            shear_mags[line_name] += [shear_mag]
+```
+
+```{python}
+fig, axes = create_axes(
+    2, subplots_rows = 2, subplots_columns = 2, sharex=True)
+
+for model in ['isotropic', 'switching']:
+    if model == 'isotropic':
+        linestyle = '-'
+    else:
+        linestyle = '--'
+    markerstyle = '.'
+    markersize = 3.0
+        
+    line_name = model + 'vorticity'
+    axes[0, 0].plot(times, layer_thicknesses[line_name],
+                    linestyle, linewidth=1,
+                    marker=markerstyle, markersize = markersize)
+    axes[1, 0].plot(times, shear_mags[line_name],
+                    linestyle, linewidth=1,
+                    marker=markerstyle, markersize = markersize)
+    line_name = model + 'current'
+    axes[0, 1].plot(times, layer_thicknesses[line_name],
+                    linestyle, linewidth=1,
+                    marker=markerstyle, markersize = markersize)
+    axes[1, 1].plot(times, shear_mags[line_name],
+                    linestyle, linewidth=1,
+                    marker=markerstyle, markersize = markersize)
+    
+# axes[0, 0].set_xlim(0, 10)
+# axes[0, 0].text(0.5, 0.025, r"$L_{u}$")
+# axes[0, 0].set_ylim(0, 0.03)
+# axes[0, 1].text(0.5, 0.025, r"$L_{B}$")
+# axes[0, 1].set_ylim(0, 0.03)
+
+# axes[1, 0].text(0.5, 0.5, r"$\Delta u$")
+# axes[1, 0].set_ylim(0, 0.6)
+# axes[1, 1].text(0.5, 0.175, r"$\Delta B$")
+# axes[1, 1].set_ylim(0, 0.2)
+    
+axes[0, 0].set_xlim(2, 6)
+axes[0, 0].set_ylabel(r"$L_{u}$")
+axes[0, 0].set_ylim(0, 0.05)
+axes[0, 1].set_ylabel(r"$L_{B}$")
+axes[0, 1].set_ylim(0, 0.05)
+
+axes[1, 0].set_ylabel(r"$\Delta u$")
+axes[1, 0].set_ylim(0, 0.6)
+axes[1, 1].set_ylabel(r"$\Delta B$")
+axes[1, 1].set_ylim(0, 0.4)
+
+plt.tight_layout()
+
+save_plot(outdir + "v-4r-4_layers_with_time.pdf")
+```
+
+## Null collapse
+
+```{python}
+def plot_vectors(sdfFile, axis, vector_name, slice_dim, slice_loc, color='k', scale=None, pivot='tail', plot_every=(1,1)):
+    dims = ["x", "y", "z"]
+    dims.remove(slice_dim)
+
+    if vector_name == "lorentz_force":
+        x_name = vector_name + "_" + dims[0]
+        y_name = vector_name + "_" + dims[1]
+        vecx = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        vecy = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+    elif vector_name == 'pressure_force':
+        x_name = vector_name + "_" + dims[0]
+        y_name = vector_name + "_" + dims[1]
+        vecx = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        vecy = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+    elif vector_name == 'isotropic_viscous_force':
+        x_name = vector_name + "_" + dims[0]
+        y_name = vector_name + "_" + dims[1]
+        vecx = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        vecy = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+    elif vector_name == "total_force":
+        x_name = "lorentz_force_" + dims[0]
+        y_name = "lorentz_force_" + dims[1]
+        lforcex = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        lforcey = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+        x_name = "pressure_force_" + dims[0]
+        y_name = "pressure_force_" + dims[1]
+        pforcex = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        pforcey = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+        vecx = lforcex + pforcex
+        vecy = lforcey + pforcey
+    elif vector_name == "velocity":
+        x_name = "Velocity_V" + dims[0]
+        y_name = "Velocity_V" + dims[1]
+        vecx = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        vecy = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+    elif vector_name == "magnetic_field":
+        x_name = "Magnetic_Field_B" + dims[0]
+        y_name = "Magnetic_Field_B" + dims[1]
+        vecx = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        vecy = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+    elif vector_name == "current_density":
+        x_name = "current_density_" + dims[0]
+        y_name = "current_density_" + dims[1]
+        vecx = get_variable_slice(sdfFile, x_name, slice_dim, slice_loc).T
+        vecy = get_variable_slice(sdfFile, y_name, slice_dim, slice_loc).T
+    
+    vecx = vecx[::plot_every[1], ::plot_every[0]]
+    vecy = vecy[::plot_every[1], ::plot_every[0]]
+    
+    extents = get_slice_extents(sdfFile, slice_dim)
+    X, Y = np.meshgrid(np.linspace(extents[0], extents[1], vecx.shape[1]),
+                       np.linspace(extents[2], extents[3], vecx.shape[0]))
+    axis.quiver(X, Y, vecx, vecy, color=color, scale=scale, pivot=pivot)
+```
+
+```{python}
+run_folder = "v-4r-4-isotropic"
+folder = data_folder + high_resolution_folder + run_folder + "/Data/"
+
+xlim = 0.25
+ylim = 0.25
+vlim = None
+
+slice_loc = 0.0
+slice_dim = "y"
+
+images = {}
+
+for i in range(34, 37):
+        print(i)
+        timedump = '{0:04d}'.format(i)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        images[i] = get_variable_slice(iso_sdf, "magnitude_current_density", slice_dim, slice_loc).T
+```
+
+```{python}
+for i in range(34, 37):
+        timedump = '{0:04d}'.format(i)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        fig, axis = create_axes(2)
+
+        im = axis.imshow(images[i], cmap="plasma",
+                         extent=extents, origin='lower',
+                         interpolation='bilinear',
+                        vmin = 0, vmax=120)
+#         attach_colorbar(axis, im)
+        axis.set_xlim((-xlim, xlim))
+        axis.set_ylim((-ylim, ylim))
+        
+        save_plot(outdir + "v-4r-4-spine-fan-reconn-"+str(i)+".pdf")
+```
+
+```{python}
+run_folder = "v-4r-4-isotropic"
+folder = data_folder + high_resolution_folder + run_folder + "/Data/"
+
+xlim = 0.25
+ylim = 0.25
+vlim = None
+
+slice_loc = 0.0
+slice_dim = "y"
+
+images = {}
+
+times = [30]
+
+for i in times:
+        print(i)
+        timedump = '{0:04d}'.format(i)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        images[i] = get_variable_slice(iso_sdf, "pressure", slice_dim, slice_loc).T
+```
+
+```{python}
+for i in times:
+        timedump = '{0:04d}'.format(i)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        fig, axis = create_axes(2)
+        
+#         im = axis.imshow((np.abs(images[i]) - np.abs(images[i][:,::-1])), cmap="coolwarm",
+        im = axis.imshow(images[i], cmap="magma",
+                         extent=extents, origin='lower',
+                         interpolation='bilinear')
+#                         vmin = -.05, vmax=.05)
+        attach_colorbar(axis, im)
+        axis.set_xlim((-xlim, xlim))
+        axis.set_ylim((-ylim, ylim))
+        plot_vectors(iso_sdf, axis, "velocity", slice_dim, slice_loc,
+                     color='k', scale=None, pivot='tip', plot_every=(2, 32))
+#         plt.show()
+        save_plot(outdir + "v-4r-4-pressure-flow-"+str(i)+".pdf")
+```
+
+```{python}
+run_folder = "v-4r-4-isotropic"
+folder = data_folder + high_resolution_folder + run_folder + "/Data/"
+
+xlim = 0.25
+ylim = 0.25
+vlim = None
+
+slice_loc = 0.0
+slice_dim = "y"
+
+images = {}
+
+times = [30]
+
+for i in times:
+        print(i)
+        timedump = '{0:04d}'.format(i)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        images[i] = get_variable_slice(iso_sdf, "Velocity_Vx", slice_dim, slice_loc).T
+```
+
+```{python}
+for i in times:
+        timedump = '{0:04d}'.format(i)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        fig, axis = create_axes(2)
+        
+        im = axis.imshow((np.abs(images[i]) - np.abs(images[i][:,::-1])), cmap="coolwarm",
+#         im = axis.imshow(images[i], cmap="coolwarm",
+                         extent=extents, origin='lower',
+                         interpolation='bilinear')
+#                         vmin = -.05, vmax=.05)
+        attach_colorbar(axis, im)
+        axis.set_xlim((0, xlim))
+        axis.set_ylim((-ylim, ylim))
+#         plt.show()
+        save_plot(outdir + "v-4r-4-vx-imbalance-"+str(i)+".pdf")
+```
+
+```{python active="", eval=FALSE}
+run_folder = "v-4r-4-isotropic"
+folder = data_folder + high_resolution_folder + run_folder + "/Data/"
+
+xlim = 0.25
+ylim = 0.25
+vlim = None
+
+slice_loc = 0.0375
+slice_dim = "z"
+
+for t in range(36, 37):
+#     for slice_dim in ["x", "y", "z"]:
+    for slice_loc in np.linspace(0.0, 0.25, 26):
+        print(t, slice_dim, slice_loc)
+        timedump = '{0:04d}'.format(t)
+        sdfFilename = folder + timedump + ".sdf"
+        iso_sdf = sdf.read(sdfFilename)
+
+        extents = get_slice_extents(iso_sdf, slice_dim)
+
+        fig, axis = plt.subplots(figsize=(8,8))
+        
+#         plot_vectors(iso_sdf, axis, "velocity",
+#                     slice_dim, slice_loc, color='w',
+#                      scale=1, pivot='tip')
+
+#         plot_vectors(iso_sdf, axis, "pressure_force",
+#                     slice_dim, slice_loc, color='k',
+#                     scale=50, pivot='tip')
+
+        image = get_variable_slice(iso_sdf, "Fluid_Energy", slice_dim, slice_loc).T
+#         image = image - image[:,::-1]
+        
+        im = axis.imshow(image, cmap="plasma",
+                         interpolation='bilinear',
+#                          vmin = 0, vmax=1.3,
+                         extent=extents, origin='lower')
+#         pressure = get_variable_slice(iso_sdf, "pressure", slice_dim, slice_loc).T
+#         con = axis.contour(pressure, np.linspace(0.870, 0.89, 5),
+#                          extent=extents, origin='lower')
+
+        attach_colorbar(axis, im)
+        axis.set_xlim((-xlim, xlim))
+        axis.set_ylim((-ylim, ylim))
+#         axis.set_yticks(np.linspace(-ylim, ylim, 51))
+        plt.show()
+```
