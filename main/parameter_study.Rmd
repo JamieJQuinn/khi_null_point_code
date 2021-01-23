@@ -5,7 +5,7 @@ jupyter:
       extension: .Rmd
       format_name: rmarkdown
       format_version: '1.2'
-      jupytext_version: 1.6.0
+      jupytext_version: 1.8.0
   kernelspec:
     display_name: Python 3
     language: python
@@ -81,7 +81,7 @@ high_temporal_cadence_folder = "/twisting-driver/detailed-reconnection-runs/"
 high_resolution_folder = "/twisting-driver/high-resolution/"
 velocity_parameter_study_folder = "/twisting-driver/parameter-study-varying-twist-velocity/"
 
-outdir = "../../images/null_point_khi/param_study/"
+outdir = "../../khi_null_point_overleaf/images/param_study/"
 
 DRAFT = True
 ```
@@ -360,10 +360,10 @@ for i, eta_power in enumerate([-3, -4]):
         axis.set_yticks(y_labels)
         axis.set_yticklabels(y_labels)
         if eta_power == -4:
-            axis.set_xlabel(r"$t$")
-        if nu_power == -5:
             axis.set_ylabel(r'KE')
-        if eta_power == -3 and nu_power == -5:
+        if nu_power == -5:
+            axis.set_xlabel(r"$t$")
+        if eta_power == -4 and nu_power == -3:
             axis.legend(frameon=False)
             
         plt.tight_layout()
@@ -485,9 +485,11 @@ for slice_dim in ['x', 'z']:
 
 ```{python}
 total = {eta:[0,0,0] for eta in resist_powers}
+marker = 'kx'
+# colour = 'k'
     
 for eta in resist_powers:
-    fig, axis = create_axes(2)
+    fig, axis = create_axes(3)
     for slice_dim in ['x', 'z']:
         linestyle = ':'
         label = "spine"
@@ -513,9 +515,10 @@ for eta in resist_powers:
     
     axis.set_ylim(0, 8e-3)
     axis.set_xlabel(r'$\nu$')
-    axis.set_ylabel(r'$\overline{Q}_{\eta}$')
     if eta == -3:
         axis.legend(frameon=False)
+        axis.set_ylabel(r'$\overline{Q}_{\eta}$')
+        
     # plt.show()
     save_plot(outdir+"balance_of_ohmic_heating"+str(eta)+".pdf")
 ```
@@ -807,7 +810,7 @@ labels = {
 markersize = 5.0
 x = [10**nu for nu in visc_powers]
 
-fig, axis = create_axes(2)
+fig, axis = create_axes(3)
 for visc_mode in ["isotropic", "switching"]:
     for eta in [-3,-4]:
         line_name = str(eta) + visc_mode
@@ -844,7 +847,7 @@ save_plot(outdir + "peak_current.pdf")
 
 ```{python}
 # Plot lines    
-fig, axes = create_axes(1, subplots_rows=2, subplots_columns=2, sharex=True)
+fig, axes = create_axes(2, subplots_rows=2, subplots_columns=2, sharex=True)
 
 labels = {
     '-3isotropic':'iso; $\eta=10^{-3}$',
@@ -1006,7 +1009,7 @@ def plot_mach_numbers(run_folders, output, upper_limits, include_legend=False, l
     # labels = [r'$\nu = 10^{-5}, \eta = 10^{-4}$', r'$\nu = 10^{-4}, \eta = 10^{-4}$', r'$\nu = 10^{-3}, \eta = 10^{-4}$']
 
     for i in [8]:
-        fig, axes = create_axes(2, subplots_rows=3, sharex=True)
+        fig, axes = create_axes(3, subplots_rows=2, sharex=True)
         for j, run_folder in enumerate(run_folders):
             print(run_folder)
             sdf_folder = data_folder + parameter_study_folder + run_folder + "/Data/"
@@ -1016,13 +1019,13 @@ def plot_mach_numbers(run_folders, output, upper_limits, include_legend=False, l
             r = np.linspace(r_min, r_max, num=fast_mach.size)
             axes[0].plot(r, fast_mach, linestyles[j], label=labels[j],
                         color=colours[j])
-            axes[2].plot(r, alfven_mach, linestyles[j])
+#             axes[2].plot(r, alfven_mach, linestyles[j])
             axes[1].plot(r, delta1, linestyles[j],
                         color=colours[j], label=labels[j])
             straight_line = np.zeros_like(r) + 1.0
             axes[1].plot((0, r_max), (1.0, 1.0), 'k', linewidth=0.5)
             axes[0].set_ylabel(r"$M_f$")
-            axes[1].set_ylabel(r"$\Delta$")
+            axes[1].set_ylabel(r"$\Lambda$")
 
         axes[1].set_xlim(0, r_max)
         axes[1].set_xlabel(r"$r$")
@@ -1035,12 +1038,12 @@ def plot_mach_numbers(run_folders, output, upper_limits, include_legend=False, l
 
 ```{python}
 eta_4_switching = ["v-5r-4-switching", "v-4r-4-switching", "v-3r-4-switching"]
-plot_mach_numbers(eta_4_switching, "mach_numbers_eta_4_swi.pdf", [0.5, 3.5])
+plot_mach_numbers(eta_4_switching, "mach_numbers_eta_4_swi.pdf", [0.5, 5])
 ```
 
 ```{python}
 eta_4_isotropic = ["v-5r-4-isotropic", "v-4r-4-isotropic", "v-3r-4-isotropic"]
-plot_mach_numbers(eta_4_isotropic, "mach_numbers_eta_4_iso.pdf", [0.5, 3.5])
+plot_mach_numbers(eta_4_isotropic, "mach_numbers_eta_4_iso.pdf", [0.5, 5])
 ```
 
 ```{python}
@@ -1050,5 +1053,9 @@ plot_mach_numbers(eta_3_switching, "mach_numbers_eta_3_swi.pdf", [0.5, 5])
 
 ```{python}
 eta_3_isotropic = ["v-5r-3-isotropic", "v-4r-3-isotropic", "v-3r-3-isotropic"]
-plot_mach_numbers(eta_3_isotropic, "mach_numbers_eta_3_iso.pdf", [0.5, 5], include_legend=True)
+plot_mach_numbers(eta_3_isotropic, "mach_numbers_eta_3_iso.pdf", [0.5, 5])
+```
+
+```{python}
+
 ```
