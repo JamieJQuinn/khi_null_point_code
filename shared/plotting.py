@@ -7,7 +7,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from plotting_parameters import *
 
-def latexify(fig_width=None, fig_height=None, columns=1, square=False):
+def latexify(fig_width=None, fig_height=None, height_mult=1, width_mult=1, columns=1, square=False):
     """Set up matplotlib's RC params for LaTeX plotting.
     Call this before plotting a figure.
 
@@ -24,19 +24,25 @@ def latexify(fig_width=None, fig_height=None, columns=1, square=False):
     # Width and max height in inches for IEEE journals taken from
     # computer.org/cms/Computer.org/Journal%20templates/transactions_art_guide.pdf
 
-    assert(columns in [1,2,3])
+    assert(columns in [1,2,3,4])
 
     if fig_width is None:
         if columns == 1:
             fig_width = COLUMN_WIDTH
         elif columns == 2:
             fig_width = COLUMN_WIDTH * COLUMN_HALFSIZE  
-        else:
+        elif columns == 3:
             fig_width = COLUMN_WIDTH * COLUMN_THIRDSIZE
+        elif columns == 4:
+            fig_width = COLUMN_WIDTH * 0.24
+
+    fig_width *= width_mult
 
     if fig_height is None:
         golden_mean = (math.sqrt(5)-1.0)/2.0    # Aesthetic ratio
         fig_height = fig_width*golden_mean # height in inches
+
+    fig_height *= height_mult
         
     if square:
         fig_height = fig_width
@@ -78,8 +84,8 @@ def remove_spines(axis, axis_side='left', sharex=False, sharey=False):
             axis.yaxis.set_ticks_position('right')
             axis.yaxis.set_label_position('right')
 
-def create_axes(n_columns=1, axis_side='left', subplots_rows=1, subplots_columns=1, sharex=False, sharey=False, square=False):
-    latexify(columns=n_columns, square=square)
+def create_axes(n_columns=1, axis_side='left', height_mult=1, width_mult=1, subplots_rows=1, subplots_columns=1, sharex=False, sharey=False, square=False):
+    latexify(columns=n_columns, square=square, height_mult=height_mult, width_mult=width_mult)
     fig, axes = plt.subplots(subplots_rows, subplots_columns, sharex=sharex, sharey=sharey)
     if subplots_rows == 1 and subplots_columns == 1:
         remove_spines(axes, axis_side)

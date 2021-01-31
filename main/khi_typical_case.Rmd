@@ -25,6 +25,7 @@ import matplotlib.pyplot as plt
 # %matplotlib inline
 
 sys.path.insert(0,'../shared')
+
 from energy import Energy
 
 import plotting
@@ -53,7 +54,7 @@ high_temporal_cadence_folder = "/twisting-driver/detailed-reconnection-runs/"
 high_resolution_folder = "/twisting-driver/high-resolution/"
 velocity_parameter_study_folder = "/twisting-driver/parameter-study-varying-twist-velocity/"
 
-outdir = "../../images/null_point_khi/"
+outdir = "../../khi_null_point_overleaf/images/"
 
 specific_run = "v-4r-4"
 iso_folder = data_folder + high_resolution_folder + specific_run + "-isotropic"
@@ -248,7 +249,10 @@ swi_energy_filename = swi_folder + "/Data/en.dat"
 energy_iso = Energy(iso_energy_filename)
 energy_swi = Energy(swi_energy_filename)
 
-_fig, axis = create_axes(3)
+ENERGY_HEIGHT_MULT=1.0
+
+print(FONTSIZE)
+_fig, axis = create_axes(3, height_mult=ENERGY_HEIGHT_MULT)
 
 axis.plot(energy_iso.data[:,0], energy_iso.data[:,2], linewidth=1, label='iso')
 axis.plot(energy_swi.data[:,0], energy_swi.data[:,2], '--', linewidth=1, label='swi')
@@ -276,7 +280,7 @@ swi_energy_filename = swi_folder + "/Data/en.dat"
 energy_iso = Energy(iso_energy_filename)
 energy_swi = Energy(swi_energy_filename)
 
-_fig, axis = create_axes(3)
+_fig, axis = create_axes(3, height_mult=ENERGY_HEIGHT_MULT)
 
 time = energy_iso.data[:,0]
 heating = energy_iso.data[:,5]
@@ -306,7 +310,7 @@ swi_energy_filename = swi_folder + "/Data/en.dat"
 energy_iso = Energy(iso_energy_filename)
 energy_swi = Energy(swi_energy_filename)
 
-_fig, axis = create_axes(3)
+_fig, axis = create_axes(3, height_mult=ENERGY_HEIGHT_MULT)
 
 time = energy_iso.data[:,0]
 heating = energy_iso.data[:,4]
@@ -333,7 +337,7 @@ swi_energy_filename = swi_folder + "/Data/en.dat"
 energy_iso = Energy(iso_energy_filename)
 energy_swi = Energy(swi_energy_filename)
 
-_fig, axis = create_axes(3)
+_fig, axis = create_axes(3, height_mult=ENERGY_HEIGHT_MULT)
 
 time = energy_iso.data[:,0]
 heating = energy_iso.data[:,3]
@@ -360,7 +364,7 @@ swi_energy_filename = swi_folder + "/Data/en.dat"
 energy_iso = Energy(iso_energy_filename)
 energy_swi = Energy(swi_energy_filename)
 
-_fig, axis = create_axes(3)
+_fig, axis = create_axes(3, height_mult=ENERGY_HEIGHT_MULT)
 
 time = energy_iso.data[:,0]
 heating = energy_iso.data[:,1]
@@ -501,7 +505,7 @@ save_plot(outdir + "v-4r-4_vorticity_current_ring_t_10.pdf")
 iso_vel = {}
 swi_vel = {}
 
-for i, t in enumerate([2, 4, 6, 8, 10, 12]):
+for i, t in enumerate([2,6,10]):
     print(t)
     iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
     iso_vel[t] = get_slice(iso_sdf, "Velocity_Vz", "z", 0.0)
@@ -510,14 +514,14 @@ for i, t in enumerate([2, 4, 6, 8, 10, 12]):
 ```
 
 ```{python}
-maxes = [5e-6, 5e-5, 1e-4, 5e-2, 5e-2, 5e-2]
-multipliers = [1, 1, 5, 1000, 1000, 1000]
+maxes = [5e-6, 1e-4, 5e-2]
+multipliers = [1,5, 1000]
 
 # for t in [2, 4, 6, 8, 10, 12]:
-for i, t in enumerate([2, 4, 6, 8, 10, 12]):
+for i, t in enumerate([2,6,10]):
     iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
 
-    _fig, axis = create_axes(2, square=True)
+    _fig, axis = create_axes(3, square=True)
 
     multiplier = multipliers[i]
     imgs = plot_side_by_side(axis, iso_sdf, 
@@ -605,7 +609,7 @@ for t in [6]:
 
 # Counterflows
 
-```{python}
+```{python active="", eval=FALSE}
 for t in [3]:
     iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
     iso_vel = get_slice(iso_sdf, "Velocity_Vx", "x", 0.0)
@@ -638,7 +642,7 @@ for t in [3]:
     save_plot(outdir + "v-4r-4_counterflows_t_"+str(t)+".pdf")
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 for t in [3]:
     iso_sdf, swi_sdf = fetch_viscosity_pair_sdffile(t, -4, -4, data_folder + high_resolution_folder)
     iso_velp = get_variable_slice(iso_sdf, "lorentz_force_x", "x", 0.0)
@@ -719,20 +723,20 @@ for t in np.arange(0, 20.5, 0.5):
     extents = iso_sdf.Grid_Grid.extents
     timedump = '{0:04d}'.format(int(t*2))
     
-    start = time.time()
+#     start = time.time()
     
     fli_data_folder = data_folder + high_resolution_folder \
     + "/v-4r-4-isotropic/Data/"
-    iso_rate_dic[t] = calc_reconnection_rate(fli_data_folder, timedump, extents)
+    iso_rate_dic[t] = calc_reconnection_rate(fli_data_folder, timedump, extents, h)
     
-    elapsed_time = time.time() - start
+#     elapsed_time = time.time() - start
     
-    print("Elapsed time (hr):", elapsed_time/3600)
-    print("Time remaining (hr):", elapsed_time*((41-2*t))/3600)
+#     print("Elapsed time (hr):", elapsed_time/3600)
+#     print("Time remaining (hr):", elapsed_time*((41-2*t))/3600)
 ```
 
 ```{python}
-for t in np.arange(17, 20.5, 0.5):
+for t in np.arange(0, 20.5, 0.5):
     if t > 17:
         side_length = 0.3
         h = 0.02
@@ -859,7 +863,7 @@ save_plot(outdir + "v-4r-4_reconn_rate_t_10.pdf")
 # plt.show()
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 t=20
 side_length = 0.5
 z_level = 0.23
@@ -879,7 +883,7 @@ swi_reconn_rate = calc_reconnection_rate(
     fli_data_folder, timedump, extents, h=0.01)
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 extents = [-side_length, side_length,
            -side_length, side_length]
 
@@ -909,7 +913,7 @@ for i, rate in enumerate([iso_reconn_rate, swi_reconn_rate]):
 
 # Shear layer thicknesses
 
-```{python}
+```{python active="", eval=FALSE}
 # Settings
 
 r_min = 0.4
@@ -918,7 +922,7 @@ z_min = -0.25
 z_max = 0.25
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 def calc_ring_properties(sdfFilename, ring_var, 
                          check_slices=False, fix_peak=None):
     if ring_var == "vorticity":
@@ -1027,7 +1031,7 @@ def calc_ring_properties(sdfFilename, ring_var,
     return real_peak_loc, layer_thickness, peak_magnitude, shear_magnitude
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 nu = -4
 eta = -4
 
@@ -1070,7 +1074,7 @@ for t in times:
             shear_mags[line_name] += [shear_mag]
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 fig, axes = create_axes(
     2, subplots_rows = 2, subplots_columns = 2, sharex=True)
 
@@ -1182,7 +1186,7 @@ def plot_vectors(sdfFile, axis, vector_name, slice_dim, slice_loc, color='k', sc
     axis.quiver(X, Y, vecx, vecy, color=color, scale=scale, pivot=pivot)
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 run_folder = "v-4r-4-isotropic"
 folder = data_folder + high_resolution_folder + run_folder + "/Data/"
 
@@ -1206,7 +1210,7 @@ for i in range(34, 37):
         images[i] = get_variable_slice(iso_sdf, "magnitude_current_density", slice_dim, slice_loc).T
 ```
 
-```{python}
+```{python active="", eval=FALSE}
 for i in range(34, 37):
         timedump = '{0:04d}'.format(i)
         sdfFilename = folder + timedump + ".sdf"
@@ -1259,7 +1263,7 @@ for i in times:
 
         extents = get_slice_extents(iso_sdf, slice_dim)
 
-        fig, axis = create_axes(2)
+        fig, axis = create_axes(3)
         
 #         im = axis.imshow((np.abs(images[i]) - np.abs(images[i][:,::-1])), cmap="coolwarm",
         im = axis.imshow(images[i], cmap="magma",
@@ -1309,13 +1313,13 @@ for i in times:
 
         extents = get_slice_extents(iso_sdf, slice_dim)
 
-        fig, axis = create_axes(2)
+        fig, axis = create_axes(3)
         
         im = axis.imshow((np.abs(images[i]) - np.abs(images[i][:,::-1])), cmap="coolwarm",
 #         im = axis.imshow(images[i], cmap="coolwarm",
                          extent=extents, origin='lower',
-                         interpolation='bilinear')
-#                         vmin = -.05, vmax=.05)
+                         interpolation='bilinear',
+                        vmin = -1e-3, vmax=1e-3)
         attach_colorbar(axis, im)
         axis.set_xlim((0, xlim))
         axis.set_ylim((-ylim, ylim))
