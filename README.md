@@ -1,4 +1,4 @@
-# Kelvin-Helmholtz instability and collapse of a twisted magnetic nullpoint with anisotropic viscosity
+# Kelvin-Helmholtz instability and collapse of a twisted magnetic nullpoint with anisotropic viscosity: Associated code
 This is the analysis code for my paper on the effect of anisotropic viscosity on the Kelvin-Helmhotz instability in the fan plane of a magnetic null point.
 
 ## Requirements
